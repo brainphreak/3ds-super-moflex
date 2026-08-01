@@ -6,6 +6,10 @@ playing it as an ordinary movie.
 
 Runs on **macOS, Windows and Linux**. Python plus ffmpeg, nothing else to install.
 
+<p align="center">
+  <img src="docs/screenshot.png" alt="SUPER MOFLEX Builder" width="720">
+</p>
+
 ## What it produces
 
 A normal-looking `.moflex` (the extension has to stay `.moflex`) that carries:
