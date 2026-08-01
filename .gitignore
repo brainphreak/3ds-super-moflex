@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.smoflex_gui.json
+super/
+*.moflex
+*.wav

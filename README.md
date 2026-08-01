@@ -1,0 +1,92 @@
+# SUPER MOFLEX Builder
+
+Turns a `.moflex` video into a **self-contained** one: a second audio language, every subtitle
+track, the library info and the poster all travel inside the file — while stock players keep
+playing it as an ordinary movie.
+
+Runs on **macOS, Windows and Linux**. Python plus ffmpeg, nothing else to install.
+
+![](docs/screenshot.png)
+
+## What it produces
+
+A normal-looking `.moflex` (the extension has to stay `.moflex`) that carries:
+
+| Where | What | Who sees it |
+|---|---|---|
+| in-band audio stream | one language, volume-normalized (English by default) | **every** player, including the original one |
+| trailer, past the last block | second audio language | players that know about the trailer |
+| trailer | every subtitle track, language-tagged | ditto |
+| trailer | title, year, genres, description, runtime, poster | ditto — the library needs no lookup |
+
+The trailer sits after the last video block, where players that don't know about it never look.
+That is the whole trick: extra *in-band* streams break the original player (it hangs on an unknown
+descriptor, and chokes to about 1 fps on an extra audio stream), while trailing bytes are
+invisible to it.
+
+## Requirements
+
+- **Python 3.8+** — [python.org](https://www.python.org/downloads/) (on Windows tick *Add Python
+  to PATH*; Tkinter is included).
+- **ffmpeg** (with `ffprobe`) — `brew install ffmpeg` on macOS, or
+  [gyan.dev builds](https://www.gyan.dev/ffmpeg/builds/) on Windows. If it isn't on your PATH,
+  use *Tools ▸ Locate ffmpeg…* or drop `ffmpeg.exe`/`ffprobe.exe` in an `ffmpeg\` folder next to
+  the app.
+- Disk: roughly the size of the encode plus ~600 MB per hour of audio for scratch WAVs.
+- RAM: the container is rewritten in memory, so allow about 3× the size of the encode
+  (a 1.5 GB movie wants ~4 GB free).
+
+## Using it
+
+```
+python3 smoflex_gui.py          # macOS / Linux
+py smoflex_gui.py               # Windows
+```
+
+1. **Source video** — the original MKV/MP4. Its audio and subtitles are what get embedded.
+2. **Encoded .moflex** — your mobiclip encode of the same title. The video comes from here; the
+   encode's own audio is replaced.
+3. **Output folder** — the finished file is named from the metadata, with an `(S)` marker:
+   `Movie Name (2004) (3D) (S).moflex`, or
+   `Show Name (2026) (S) - S01e02 - Episode Title.moflex`.
+4. Pick which audio goes in-band (what stock players hear) and which becomes the second track.
+5. Add `.srt` files for any language the source only has as *picture* subtitles — Blu-ray rips
+   carry PGS images, which cannot be turned into text without OCR. Name them
+   `Whatever.eng.srt`, `Whatever.jpn.srt` so each track ends up labelled.
+6. **Build**. Audio extraction is the slow part; the log tells you where it is, and *Cancel*
+   stops it without leaving a half-written file.
+
+A TMDB read token is optional — with one, the title, year, genres, description and poster are
+fetched and embedded, so the file describes itself offline. Get one free from
+*themoviedb.org ▸ Settings ▸ API*.
+
+Everything is verified after writing: the trailer is walked back section by section, because a
+flaky network share once zeroed the tail of a file that had reported success.
+
+## Command line
+
+Same pipeline, no window:
+
+```
+python3 smoflex_build.py source.mkv encoded.moflex -d ./super \
+        --srt Movie.eng.srt --srt Movie.jpn.srt --format converted
+```
+
+`--help` lists the rest. `TMDB_TOKEN` in the environment works instead of `--tmdb`.
+
+## Files
+
+| File | Role |
+|---|---|
+| `smoflex_gui.py` | the desktop app |
+| `smoflex_build.py` | the pipeline: probe → extract → metadata → assemble → verify (importable, and a CLI) |
+| `smoflex_core.py` | container surgery: ADPCM encoding, frame-accurate repack, trailer writing |
+
+## Notes and limits
+
+- Subtitles must be **text**. PGS/VobSub tracks are reported and skipped.
+- Audio is resampled to 44.1 kHz stereo — that is what the format carries.
+- Normalization is peak-only: one constant multiplier so the loudest sample lands at −1 dBFS.
+  No compression, no dynamics touched, and clipping is impossible by construction.
+- A no-op repack is byte-identical to the source file, so the video is never re-encoded or
+  degraded by this tool.
