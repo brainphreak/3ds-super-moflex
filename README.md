@@ -26,10 +26,17 @@ invisible to it.
 
 - **Python 3.8+** — [python.org](https://www.python.org/downloads/) (on Windows tick *Add Python
   to PATH*; Tkinter is included).
-- **ffmpeg** (with `ffprobe`) — `brew install ffmpeg` on macOS, or
-  [gyan.dev builds](https://www.gyan.dev/ffmpeg/builds/) on Windows. If it isn't on your PATH,
-  use *Tools ▸ Locate ffmpeg…* or drop `ffmpeg.exe`/`ffprobe.exe` in an `ffmpeg\` folder next to
-  the app.
+- **ffmpeg**, including `ffprobe` (every distribution ships both). The app checks on startup and
+  says so plainly if it is missing — a warning bar across the window with install instructions
+  for your platform — so you find out before starting a build rather than during one.
+  - macOS: `brew install ffmpeg`, or a build from [evermeet.cx](https://evermeet.cx/ffmpeg/)
+  - Windows: `winget install Gyan.FFmpeg`, or the "release full" zip from
+    [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) — copy `ffmpeg.exe` and `ffprobe.exe` into an
+    `ffmpeg\` folder next to the app and it finds them
+  - Linux: `sudo apt install ffmpeg` (or dnf/pacman)
+
+  Installed somewhere unusual? *Tools ▸ Locate ffmpeg…* — pointing at `ffmpeg` picks up
+  `ffprobe` beside it, and the choice is remembered.
 - Disk: roughly the size of the encode plus ~600 MB per hour of audio for scratch WAVs.
 - RAM: the container is rewritten in memory, so allow about 4× the size of the encode
   (a 1.5 GB feature film peaked near 7 GB).
@@ -64,9 +71,11 @@ py smoflex_gui.py               # Windows
 Subtitle order in the finished file is English first (the default track), then Japanese, then
 everything else alphabetically.
 
-A TMDB read token is optional — with one, the title, year, genres, description and poster are
-fetched and embedded, so the file describes itself offline. Get one free from
-*themoviedb.org ▸ Settings ▸ API*.
+**Metadata** is yours to control. Every field — title, year, episode title, air/release date,
+genres, runtime, category, description, poster — can be typed in, and what you type always wins.
+A TMDB read token is optional: with one, **Look up** fills those fields in so you can see and
+edit them before building, and Build fetches them anyway if you leave them blank. Get a token
+free from *themoviedb.org ▸ Settings ▸ API*. Nothing is embedded that you did not see.
 
 Everything is verified after writing: the trailer is walked back section by section, because a
 flaky network share once zeroed the tail of a file that had reported success.

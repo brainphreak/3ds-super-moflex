@@ -226,7 +226,8 @@ def probe_source(video):
 
 def build(video, moflex, out_path=None, out_dir=None, extra_srts=None, boost=True,
           is3d=None, fmt='converted', tmdb_token=None, title=None, year=None, poster=None,
-          audio_in=None, audio_alt=None, offset=0.0, srt_offset=0.0, log=print, cancel=None):
+          audio_in=None, audio_alt=None, offset=0.0, srt_offset=0.0, meta=None,
+          log=print, cancel=None):
     """Run the whole pipeline. Returns the output path. `log` is a callback for progress text,
     `cancel` an optional threading.Event that aborts at the next checkpoint."""
     extra_srts = extra_srts or []
@@ -335,7 +336,7 @@ def build(video, moflex, out_path=None, out_dir=None, extra_srts=None, boost=Tru
                 f'supplied subtitles {srt_offset:+.3f} s.')
         log(f"Subtitles: {', '.join(c for c, _ in srt_files) or 'none'}")
 
-        # metadata
+        # metadata: defaults <- TMDB (if a token is set) <- whatever the caller filled in by hand
         info = {'title': title, 'year': year, 'genres': [], 'runtime': 0, 'date': '',
                 'desc': '', 'showdesc': '', 'poster': poster}
         if tmdb_token:
@@ -344,12 +345,22 @@ def build(video, moflex, out_path=None, out_dir=None, extra_srts=None, boost=Tru
                 pj = os.path.join(work, 'poster.jpg')
                 urllib.request.urlretrieve(f"https://image.tmdb.org/t/p/w500{info['poster']}", pj)
                 info['poster'] = pj
+        if meta:                       # hand-entered values always win over anything fetched
+            info.update({k: v for k, v in meta.items() if v not in (None, '', [], 0)})
+            log('Using the metadata you supplied'
+                + (' (over TMDB)' if tmdb_token else '') + '.')
+        if info.get('poster') and not os.path.exists(str(info['poster'])):
+            log(f"Poster {info['poster']} not found — building without artwork.")
+            info['poster'] = None
 
+        gen = info.get('genres') or []
+        if isinstance(gen, str):                      # accept "Fantasy, Animation" as typed
+            gen = [g.strip() for g in gen.split(',') if g.strip()]
         nfo = os.path.join(work, 'info.nfo')
         with open(nfo, 'w') as f:
             f.write(f"title={info['title']}\nyear={info['year']}\n"
-                    f"category={'TV Shows' if se else 'Movies'}\n"
-                    f"genres={', '.join(info.get('genres', []))}\nruntime={info.get('runtime', 0)}\n"
+                    f"category={info.get('category') or ('TV Shows' if se else 'Movies')}\n"
+                    f"genres={', '.join(gen)}\nruntime={info.get('runtime', 0)}\n"
                     f"date={info.get('date','')}\nis3d={1 if is3d else 0}\n"
                     f"format={fmt if is3d else ''}\ndesc={info.get('desc','')}\n")
             if info.get('showdesc'):
@@ -453,6 +464,12 @@ def _cli(argv):
                     help='same, for --srt files only; they are usually already timed to the '
                          'encode\'s master, so this defaults to 0')
     ap.add_argument('--poster', help='poster image to embed (default: TMDB, if a token is set)')
+    ap.add_argument('--genres', help='comma separated, e.g. "Fantasy, Animation"')
+    ap.add_argument('--runtime', type=int, help='minutes')
+    ap.add_argument('--category', help='library category (default: Movies, or TV Shows for SxxEyy)')
+    ap.add_argument('--date', help='release / air date, YYYY-MM-DD')
+    ap.add_argument('--eptitle', help='episode title (used in the output filename)')
+    ap.add_argument('--desc', help='description text')
     ap.add_argument('--tmdb', default=os.environ.get('TMDB_TOKEN'),
                     help='TMDB read token for metadata (or set TMDB_TOKEN)')
     ap.add_argument('--ffmpeg', help='path to ffmpeg if it is not on PATH')
@@ -461,10 +478,12 @@ def _cli(argv):
         set_tools(a.ffmpeg)
     is3d = True if a.three_d else (False if a.two_d else None)
     try:
+        meta = {'title': a.title, 'year': a.year, 'genres': a.genres, 'runtime': a.runtime,
+                'category': a.category, 'date': a.date, 'eptitle': a.eptitle, 'desc': a.desc}
         build(a.video, a.moflex, out_path=a.out, out_dir=a.outdir, extra_srts=a.srt,
               boost=not a.no_normalize, is3d=is3d, fmt=a.format, tmdb_token=a.tmdb,
               title=a.title, year=a.year, poster=a.poster, offset=a.offset,
-              srt_offset=a.srt_offset)
+              srt_offset=a.srt_offset, meta=meta)
     except (RuntimeError, Cancelled) as ex:
         print(f'error: {ex}', file=sys.stderr)
         return 1

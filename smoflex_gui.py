@@ -66,11 +66,13 @@ class App(ttk.Frame):
             if found:
                 sb.set_tools(found)
 
+        self.banner = None
         self._build_ui()
         self._poll_log()
         if not sb.tools_ready():
-            self.log('ffmpeg was not found. Install it, or use Tools ▸ Locate ffmpeg… to point '
-                     'this app at the binary.')
+            self.log('ffmpeg was not found — nothing can be built until it is installed.')
+            self._ffmpeg_banner()
+            self.after(400, self._ffmpeg_help)      # once the window is actually on screen
 
     # ---- layout ---------------------------------------------------------------------------
 
@@ -84,6 +86,12 @@ class App(ttk.Frame):
         self.v_token = tk.StringVar(value=self.cfg.get('tmdb', ''))
         self.v_norm = tk.BooleanVar(value=True)
         self.v_offset = tk.StringVar(value='0')
+        self.v_eptitle = tk.StringVar()
+        self.v_date = tk.StringVar()
+        self.v_genres = tk.StringVar()
+        self.v_runtime = tk.StringVar()
+        self.v_cat = tk.StringVar(value='(auto)')
+        self.v_poster = tk.StringVar()
         self.v_3d = tk.StringVar(value='Auto')
         self.v_fmt = tk.StringVar(value='converted')
         self.v_status = tk.StringVar(value='Ready.')
@@ -139,24 +147,69 @@ class App(ttk.Frame):
         of = ttk.LabelFrame(self, text='Metadata', padding=6)
         of.grid(row=r, column=0, columnspan=3, sticky='ew', pady=2)
         of.columnconfigure(1, weight=1)
-        ttk.Label(of, text='Title override:').grid(row=0, column=0, sticky='w')
+        ttk.Label(of, text='Title:').grid(row=0, column=0, sticky='w')
         ttk.Entry(of, textvariable=self.v_title).grid(row=0, column=1, sticky='ew', padx=4)
         ttk.Label(of, text='Year:').grid(row=0, column=2, sticky='w', padx=(8, 0))
         ttk.Entry(of, textvariable=self.v_year, width=6).grid(row=0, column=3, sticky='w', padx=4)
-        ttk.Label(of, text='3D:').grid(row=1, column=0, sticky='w', pady=(6, 0))
-        ttk.Combobox(of, textvariable=self.v_3d, values=['Auto', '2D', '3D'], state='readonly',
-                     width=6).grid(row=1, column=1, sticky='w', padx=4, pady=(6, 0))
-        ttk.Label(of, text='3D origin:').grid(row=1, column=2, sticky='w', padx=(8, 0), pady=(6, 0))
-        ttk.Combobox(of, textvariable=self.v_fmt, values=['converted', 'native'], state='readonly',
-                     width=10).grid(row=1, column=3, sticky='w', padx=4, pady=(6, 0))
-        ttk.Label(of, text='TMDB token:').grid(row=2, column=0, sticky='w', pady=(6, 0))
-        ttk.Entry(of, textvariable=self.v_token, show='•').grid(row=2, column=1, columnspan=2,
+
+        ttk.Label(of, text='Episode title:').grid(row=1, column=0, sticky='w', pady=(4, 0))
+        ttk.Entry(of, textvariable=self.v_eptitle).grid(row=1, column=1, sticky='ew', padx=4,
+                                                        pady=(4, 0))
+        ttk.Label(of, text='Aired/released:').grid(row=1, column=2, sticky='w', padx=(8, 0),
+                                                   pady=(4, 0))
+        ttk.Entry(of, textvariable=self.v_date, width=12).grid(row=1, column=3, sticky='w', padx=4,
+                                                               pady=(4, 0))
+
+        ttk.Label(of, text='Genres:').grid(row=2, column=0, sticky='w', pady=(4, 0))
+        ttk.Entry(of, textvariable=self.v_genres).grid(row=2, column=1, sticky='ew', padx=4,
+                                                       pady=(4, 0))
+        ttk.Label(of, text='Runtime (min):').grid(row=2, column=2, sticky='w', padx=(8, 0),
+                                                  pady=(4, 0))
+        ttk.Entry(of, textvariable=self.v_runtime, width=6).grid(row=2, column=3, sticky='w',
+                                                                 padx=4, pady=(4, 0))
+
+        ttk.Label(of, text='Category:').grid(row=3, column=0, sticky='w', pady=(4, 0))
+        ttk.Combobox(of, textvariable=self.v_cat, values=['(auto)', 'Movies', 'TV Shows', 'Music',
+                                                          'Anime', 'Documentaries'],
+                     width=14).grid(row=3, column=1, sticky='w', padx=4, pady=(4, 0))
+        ttk.Label(of, text='3D:').grid(row=3, column=2, sticky='w', padx=(8, 0), pady=(4, 0))
+        f3 = ttk.Frame(of)
+        f3.grid(row=3, column=3, sticky='w', padx=4, pady=(4, 0))
+        ttk.Combobox(f3, textvariable=self.v_3d, values=['Auto', '2D', '3D'], state='readonly',
+                     width=5).pack(side='left')
+        ttk.Combobox(f3, textvariable=self.v_fmt, values=['converted', 'native'], state='readonly',
+                     width=10).pack(side='left', padx=(4, 0))
+
+        ttk.Label(of, text='Description:').grid(row=4, column=0, sticky='nw', pady=(4, 0))
+        dfr = ttk.Frame(of)
+        dfr.grid(row=4, column=1, columnspan=3, sticky='ew', padx=4, pady=(4, 0))
+        dfr.columnconfigure(0, weight=1)
+        self.txt_desc = tk.Text(dfr, height=3, wrap='word')
+        self.txt_desc.grid(row=0, column=0, sticky='ew')
+        ds = ttk.Scrollbar(dfr, command=self.txt_desc.yview)
+        ds.grid(row=0, column=1, sticky='ns')
+        self.txt_desc['yscrollcommand'] = ds.set
+
+        ttk.Label(of, text='Poster:').grid(row=5, column=0, sticky='w', pady=(4, 0))
+        ttk.Entry(of, textvariable=self.v_poster).grid(row=5, column=1, columnspan=2, sticky='ew',
+                                                       padx=4, pady=(4, 0))
+        ttk.Button(of, text='Browse…', command=self._pick_poster).grid(row=5, column=3, sticky='w',
+                                                                       padx=4, pady=(4, 0))
+
+        ttk.Label(of, text='TMDB token:').grid(row=6, column=0, sticky='w', pady=(6, 0))
+        ttk.Entry(of, textvariable=self.v_token, show='•').grid(row=6, column=1, columnspan=2,
                                                                 sticky='ew', padx=4, pady=(6, 0))
-        ttk.Button(of, text='Get one', width=8,
+        tb = ttk.Frame(of)
+        tb.grid(row=6, column=3, sticky='w', padx=4, pady=(6, 0))
+        self.btn_look = ttk.Button(tb, text='Look up', width=8, command=self._lookup)
+        self.btn_look.pack(side='left')
+        ttk.Button(tb, text='Get token', width=9,
                    command=lambda: webbrowser.open('https://www.themoviedb.org/settings/api')
-                   ).grid(row=2, column=3, sticky='w', padx=4, pady=(6, 0))
+                   ).pack(side='left', padx=(4, 0))
         ttk.Label(of, text='Optional: fills in title, year, genres, description and poster so the '
-                           'player needs no lookup.', foreground='#666'
+                           'player needs no lookup. Build fetches it automatically — "Look up" '
+                           'just shows you what it will get first.', foreground='#666',
+                  wraplength=560, justify='left'
                   ).grid(row=3, column=0, columnspan=4, sticky='w', pady=(4, 0))
         r += 1
 
@@ -239,7 +292,74 @@ class App(ttk.Frame):
             sb.set_tools(p)
             self.cfg['ffmpeg'] = p
             save_config(self.cfg)
-            self.log(f'ffmpeg: {p}' + ('' if sb.tools_ready() else '  (ffprobe still missing!)'))
+            ok = sb.tools_ready()
+            self.log(f'ffmpeg: {p}' + ('' if ok else '  (ffprobe still missing — it normally '
+                                                     'sits in the same folder)'))
+            self._ffmpeg_banner()
+
+    def _pick_poster(self):
+        p = filedialog.askopenfilename(title='Poster image',
+                                       filetypes=[('Images', '*.jpg *.jpeg *.png *.webp'),
+                                                  ('All files', '*.*')])
+        if p:
+            self.v_poster.set(p)
+
+    # ---- ffmpeg presence -------------------------------------------------------------------
+
+    def _ffmpeg_banner(self):
+        """Show a standing warning while ffmpeg is missing; hide it once it is found."""
+        if sb.tools_ready():
+            if self.banner is not None:
+                self.banner.destroy()
+                self.banner = None
+            return
+        if self.banner is not None:
+            return
+        self.banner = tk.Frame(self, bg='#7a2a2a')
+        self.banner.grid(row=99, column=0, columnspan=3, sticky='ew', pady=(6, 0))
+        self.banner.columnconfigure(0, weight=1)
+        tk.Label(self.banner, bg='#7a2a2a', fg='white', anchor='w', padx=8, pady=5,
+                 text='ffmpeg was not found — builds cannot run without it.'
+                 ).grid(row=0, column=0, sticky='ew')
+        tk.Button(self.banner, text='How do I install it?', command=self._ffmpeg_help
+                  ).grid(row=0, column=1, padx=4, pady=3)
+        tk.Button(self.banner, text='Locate…', command=self._pick_ffmpeg
+                  ).grid(row=0, column=2, padx=(0, 6), pady=3)
+
+    def _ffmpeg_help(self):
+        if sys.platform == 'darwin':
+            body = ('macOS\n\n'
+                    '1. Install Homebrew if you do not have it — paste this in Terminal:\n'
+                    '     /bin/bash -c "$(curl -fsSL '
+                    'https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"\n\n'
+                    '2. Then:\n'
+                    '     brew install ffmpeg\n\n'
+                    'No Homebrew? Download a build from evermeet.cx/ffmpeg (you need BOTH '
+                    'ffmpeg and ffprobe), put the two files in one folder, and use '
+                    'Tools ▸ Locate ffmpeg… to point at ffmpeg.')
+            url = 'https://evermeet.cx/ffmpeg/'
+        elif sys.platform == 'win32':
+            body = ('Windows\n\n'
+                    'Easiest — in PowerShell:\n'
+                    '     winget install Gyan.FFmpeg\n'
+                    'then close and reopen this app.\n\n'
+                    'By hand:\n'
+                    '1. Download the "release full" zip from gyan.dev.\n'
+                    '2. Unzip it.\n'
+                    '3. Copy ffmpeg.exe and ffprobe.exe out of its bin folder into a folder '
+                    'named "ffmpeg" next to this app — it looks there automatically.\n\n'
+                    'Or put them anywhere and use Tools ▸ Locate ffmpeg….')
+            url = 'https://www.gyan.dev/ffmpeg/builds/'
+        else:
+            body = ('Linux\n\n'
+                    '     sudo apt install ffmpeg        (Debian/Ubuntu)\n'
+                    '     sudo dnf install ffmpeg        (Fedora)\n'
+                    '     sudo pacman -S ffmpeg          (Arch)\n\n'
+                    'Then reopen this app.')
+            url = 'https://ffmpeg.org/download.html'
+        body += '\n\nffprobe is required as well as ffmpeg — every distribution ships both.'
+        if messagebox.askyesno(APP, body + '\n\nOpen the download page now?'):
+            webbrowser.open(url)
 
     def _add_srt(self):
         for p in filedialog.askopenfilenames(title='Subtitle files', filetypes=SRT_TYPES,
@@ -286,6 +406,59 @@ class App(ttk.Frame):
             self.log('This disc rip carries picture subtitles only. Add text .srt files above if '
                      'you want subtitles in the finished file.')
 
+    def _lookup(self):
+        """Fetch the TMDB entry now and show it, so nothing is a surprise at build time."""
+        token = self.v_token.get().strip()
+        if not token:
+            return messagebox.showinfo(APP, 'Paste a TMDB read token first — "Get token" opens '
+                                            'the page (themoviedb.org ▸ Settings ▸ API).')
+        name = self.v_video.get().strip() or self.v_moflex.get().strip()
+        if not name:
+            return messagebox.showinfo(APP, 'Choose the source video (or the .moflex) first — '
+                                            'the title and year are read from its filename.')
+        t, y, se = sb.parse_name(name)
+        title = self.v_title.get().strip() or t
+        year = self.v_year.get().strip()
+        year = int(year) if year.isdigit() else y
+        self.cfg['tmdb'] = token
+        save_config(self.cfg)
+        self.btn_look['state'] = 'disabled'
+        self.log(f'Looking up {title!r} ({year or "no year"})'
+                 + (f' S{se[0]:02d}E{se[1]:02d}' if se else '') + ' …')
+
+        def run():
+            info = sb.fetch_meta(token, title, year, se, self.q.put)
+            self.q.put(('lookup', info))
+        threading.Thread(target=run, daemon=True).start()
+
+    def _show_lookup(self, info):
+        self.btn_look['state'] = 'normal'
+        if not info:
+            return self.log('Nothing came back — check the title, or clear the year and retry.')
+        self.log(f"  title    {info.get('title','?')} ({info.get('year','?')})")
+        if info.get('eptitle'):
+            self.log(f"  episode  {info['eptitle']}"
+                     + (f"   aired {info['date']}" if info.get('date') else ''))
+        self.log(f"  genres   {', '.join(info.get('genres', [])) or '(none)'}")
+        self.log(f"  runtime  {info.get('runtime', 0)} min")
+        self.log(f"  poster   {'yes' if info.get('poster') else 'none found'}")
+        desc = (info.get('desc') or info.get('showdesc') or '').strip()
+        if desc:
+            self.log(f"  {desc[:300]}{'…' if len(desc) > 300 else ''}")
+        # drop it into the fields so you can edit before building; anything you already typed wins
+        def fill(var, val):
+            if val and not var.get().strip():
+                var.set(str(val))
+        fill(self.v_title, info.get('title'))
+        fill(self.v_year, info.get('year'))
+        fill(self.v_eptitle, info.get('eptitle'))
+        fill(self.v_date, info.get('date'))
+        fill(self.v_genres, ', '.join(info.get('genres', [])))
+        fill(self.v_runtime, info.get('runtime'))
+        if not self.txt_desc.get('1.0', 'end').strip():
+            self.txt_desc.insert('1.0', (info.get('desc') or info.get('showdesc') or '').strip())
+        self.log('Fields filled in — edit anything you like before building.')
+
     def _sel_index(self, var):
         """Stream index for a combobox row. None = 'decide automatically' (nothing chosen yet),
         -1 = the explicit '(none)' row; never conflate the two or a silent path would drop the
@@ -309,8 +482,8 @@ class App(ttk.Frame):
         if not (moflex and os.path.isfile(moflex)):
             return messagebox.showerror(APP, 'Choose the encoded .moflex first.')
         if not sb.tools_ready():
-            return messagebox.showerror(APP, 'ffmpeg / ffprobe not found.\n\nInstall ffmpeg, or use '
-                                             'Tools ▸ Locate ffmpeg… to point at the binary.')
+            self._ffmpeg_help()
+            return
         outdir = self.v_outdir.get().strip() or os.path.join(os.path.dirname(moflex), 'super')
         os.makedirs(outdir, exist_ok=True)
         self.cfg['outdir'] = outdir
@@ -322,12 +495,25 @@ class App(ttk.Frame):
             offset = float(self.v_offset.get().strip() or 0)
         except ValueError:
             return messagebox.showerror(APP, 'Sync offset must be a number of seconds, e.g. 14.45')
+        rt = self.v_runtime.get().strip()
+        cat = self.v_cat.get().strip()
+        # anything typed here overrides TMDB; blank fields fall back to it (or to defaults)
+        meta = {'title': self.v_title.get().strip(),
+                'year': int(year) if year.isdigit() else 0,
+                'eptitle': self.v_eptitle.get().strip(),
+                'date': self.v_date.get().strip(),
+                'genres': [g.strip() for g in self.v_genres.get().split(',') if g.strip()],
+                'runtime': int(rt) if rt.isdigit() else 0,
+                'category': '' if cat in ('', '(auto)') else cat,
+                'desc': self.txt_desc.get('1.0', 'end').strip()}
         opts = dict(out_dir=outdir, extra_srts=list(self.srts), boost=self.v_norm.get(),
                     offset=offset,
                     is3d={'Auto': None, '2D': False, '3D': True}[self.v_3d.get()],
                     fmt=self.v_fmt.get(), tmdb_token=self.v_token.get().strip() or None,
                     title=self.v_title.get().strip() or None,
                     year=int(year) if year.isdigit() else None,
+                    poster=self.v_poster.get().strip() or None,
+                    meta=meta,
                     audio_in=self._sel_index(self.v_ain),
                     audio_alt=self._sel_index(self.v_aalt))
 
