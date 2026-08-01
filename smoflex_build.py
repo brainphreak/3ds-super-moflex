@@ -176,6 +176,34 @@ def fetch_meta(token, title, year, se, log):
 
 IMAGE_SUBS = {'hdmv_pgs_subtitle', 'dvd_subtitle', 'dvdsub', 'xsub', 'pgssub'}
 
+def _duration(video):
+    """Container duration in seconds, or None if ffprobe won't say."""
+    rc, out, _ = _run([FFPROBE, '-v', 'error', '-show_entries', 'format=duration',
+                       '-of', 'default=nk=1:nw=1', video], capture=True)
+    try:
+        return float(out.strip()) if rc == 0 else None
+    except ValueError:
+        return None
+
+_TS = re.compile(r'(\d\d):(\d\d):(\d\d)[,.](\d\d\d)')
+
+def shift_srt(src, dst, offset):
+    """Copy an .srt with every cue moved by `offset` seconds (cues that would land before
+    zero are clamped to it)."""
+    off_ms = int(round(offset * 1000))
+
+    def bump(m):
+        ms = (int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3))) * 1000 \
+             + int(m.group(4))
+        ms = max(0, ms + off_ms)
+        return f'{ms//3600000:02d}:{ms//60000%60:02d}:{ms//1000%60:02d},{ms%1000:03d}'
+
+    with open(src, encoding='utf-8', errors='replace') as f:
+        body = f.read()
+    with open(dst, 'w', encoding='utf-8') as f:
+        f.write(_TS.sub(bump, body))
+    return dst
+
 def probe_source(video):
     """Summarize a source file for the GUI: audio tracks, text subs, image subs.
     Returns {'audio': [(index, label)], 'subs': [(index, label)], 'imagesubs': n}."""
@@ -198,7 +226,7 @@ def probe_source(video):
 
 def build(video, moflex, out_path=None, out_dir=None, extra_srts=None, boost=True,
           is3d=None, fmt='converted', tmdb_token=None, title=None, year=None, poster=None,
-          audio_in=None, audio_alt=None, log=print, cancel=None):
+          audio_in=None, audio_alt=None, offset=0.0, srt_offset=0.0, log=print, cancel=None):
     """Run the whole pipeline. Returns the output path. `log` is a callback for progress text,
     `cancel` an optional threading.Event that aborts at the next checkpoint."""
     extra_srts = extra_srts or []
@@ -241,11 +269,23 @@ def build(video, moflex, out_path=None, out_dir=None, extra_srts=None, boost=Tru
             a_alt = None
         alt_lang = to3((a_alt.get('tags', {}) or {}).get('language', 'und')) if a_alt else None
 
+        # An encode often starts from a different master than the source file: a distributor
+        # logo the rip lacks, a trimmed head, and so on. `offset` slides everything taken from
+        # the source (both audio tracks and every subtitle) onto the encode's timeline.
+        pre, post = [], []
+        if offset > 0:
+            post = ['-af', f'adelay={int(round(offset * 1000))}:all=1']
+        elif offset < 0:
+            pre = ['-ss', f'{-offset:.3f}']
+        dur = _duration(video)
+        if offset and dur:          # keep the length the source had: silence in at the head,
+            post += ['-t', f'{dur:.3f}']   # the same amount pushed off the tail
+
         def wav(stream, tag):
             p = os.path.join(work, f'a.{tag}.wav')
-            rc, _, err = _run([FFMPEG, '-y', '-v', 'error', '-i', video,
-                               '-map', f"0:{stream['index']}", '-ac', '2', '-ar', '44100',
-                               '-c:a', 'pcm_s16le', p], cancel)
+            rc, _, err = _run([FFMPEG, '-y', '-v', 'error'] + pre + ['-i', video,
+                               '-map', f"0:{stream['index']}", '-ac', '2', '-ar', '44100']
+                              + post + ['-c:a', 'pcm_s16le', p], cancel)
             if rc != 0 or not os.path.exists(p) or os.path.getsize(p) < 1024:
                 raise RuntimeError(f'audio extraction failed: {err.strip()[:200]}')
             return p
@@ -269,15 +309,30 @@ def build(video, moflex, out_path=None, out_dir=None, extra_srts=None, boost=Tru
             rc, _, _ = _run([FFMPEG, '-y', '-v', 'error', '-i', video,
                              '-map', f"0:{st['index']}", p], cancel)
             if rc == 0 and os.path.exists(p) and os.path.getsize(p) > 0:
-                srt_files.append((c, p)); seen.add(c)
+                srt_files.append((c, p, True)); seen.add(c)       # True = came from the source
         if skipped:
             log(f"NOTE: {skipped} image-based (PGS/VobSub) subtitle track(s) skipped — supply text .srt instead.")
         for p in extra_srts:
             m = re.search(r'\.([a-z0-9-]{2,6})\.srt$', os.path.basename(p), re.I)
             c = to3(m.group(1)) if m else 'SUB'
             if c not in seen:
-                srt_files.append((c, p)); seen.add(c)
-        srt_files.sort(key=lambda x: (0 if x[0] == 'ENG' else 1, x[0]))
+                srt_files.append((c, p, False)); seen.add(c)      # False = supplied by hand
+        # ENG is the default track (first wins), JPN next, everything else alphabetical
+        _rank = {'ENG': 0, 'JPN': 1}
+        srt_files.sort(key=lambda x: (_rank.get(x[0], 9), x[0]))
+        # Subtitles pulled OUT of the source share its timeline, so they move with the audio.
+        # Files supplied by hand were timed to whatever release they were made for -- often the
+        # same master the encode came from -- so they get their own knob and default to
+        # untouched. (Downloaded subs for a film whose encode has a longer head are a real case:
+        # the audio needed +14.4 s while the subtitles were already correct.)
+        moved = []
+        for c, p, from_source in srt_files:
+            sh = offset if from_source else srt_offset
+            moved.append((c, shift_srt(p, os.path.join(work, f'sh.{c}.srt'), sh) if sh else p))
+        srt_files = moved
+        if offset or srt_offset:
+            log(f'Offsets applied: audio {offset:+.3f} s, extracted subtitles {offset:+.3f} s, '
+                f'supplied subtitles {srt_offset:+.3f} s.')
         log(f"Subtitles: {', '.join(c for c, _ in srt_files) or 'none'}")
 
         # metadata
@@ -389,6 +444,14 @@ def _cli(argv):
     ap.add_argument('--format', choices=['native', 'converted'], default='converted',
                     help='3D origin recorded in the metadata')
     ap.add_argument('--title'), ap.add_argument('--year', type=int)
+    ap.add_argument('--offset', type=float, default=0.0, metavar='SECS',
+                    help='slide the source audio (and the source\'s own subtitle tracks) onto '
+                         'the encode\'s timeline: positive if the encode starts earlier (extra '
+                         'logo/leader the source lacks), negative if it starts later. Only '
+                         'needed when the encode did not come from this exact file.')
+    ap.add_argument('--srt-offset', type=float, default=0.0, metavar='SECS',
+                    help='same, for --srt files only; they are usually already timed to the '
+                         'encode\'s master, so this defaults to 0')
     ap.add_argument('--poster', help='poster image to embed (default: TMDB, if a token is set)')
     ap.add_argument('--tmdb', default=os.environ.get('TMDB_TOKEN'),
                     help='TMDB read token for metadata (or set TMDB_TOKEN)')
@@ -400,7 +463,8 @@ def _cli(argv):
     try:
         build(a.video, a.moflex, out_path=a.out, out_dir=a.outdir, extra_srts=a.srt,
               boost=not a.no_normalize, is3d=is3d, fmt=a.format, tmdb_token=a.tmdb,
-              title=a.title, year=a.year, poster=a.poster)
+              title=a.title, year=a.year, poster=a.poster, offset=a.offset,
+              srt_offset=a.srt_offset)
     except (RuntimeError, Cancelled) as ex:
         print(f'error: {ex}', file=sys.stderr)
         return 1

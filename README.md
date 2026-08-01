@@ -51,8 +51,18 @@ py smoflex_gui.py               # Windows
 5. Add `.srt` files for any language the source only has as *picture* subtitles — Blu-ray rips
    carry PGS images, which cannot be turned into text without OCR. Name them
    `Whatever.eng.srt`, `Whatever.jpn.srt` so each track ends up labelled.
-6. **Build**. Audio extraction is the slow part; the log tells you where it is, and *Cancel*
+6. **Sync offset** — leave at 0 when the encode was made from this same file. If it came from a
+   different master (one that opens with a logo or leader the source lacks), set the number of
+   seconds the encode runs ahead. Measure it, don't guess: decode the encode's own audio and
+   cross-correlate it against the source track. One real case needed **+14.446 s**, flat across
+   the whole film. The offset moves the audio and the source's own subtitle tracks; `.srt` files
+   you added are left alone, because downloaded subtitles are usually already timed to the same
+   master the encode came from (`--srt-offset` if they are not).
+7. **Build**. Audio extraction is the slow part; the log tells you where it is, and *Cancel*
    stops it without leaving a half-written file.
+
+Subtitle order in the finished file is English first (the default track), then Japanese, then
+everything else alphabetically.
 
 A TMDB read token is optional — with one, the title, year, genres, description and poster are
 fetched and embedded, so the file describes itself offline. Get one free from

@@ -83,6 +83,7 @@ class App(ttk.Frame):
         self.v_year = tk.StringVar()
         self.v_token = tk.StringVar(value=self.cfg.get('tmdb', ''))
         self.v_norm = tk.BooleanVar(value=True)
+        self.v_offset = tk.StringVar(value='0')
         self.v_3d = tk.StringVar(value='Auto')
         self.v_fmt = tk.StringVar(value='converted')
         self.v_status = tk.StringVar(value='Ready.')
@@ -110,6 +111,15 @@ class App(ttk.Frame):
         ttk.Checkbutton(af, text='Normalize both to −1 dBFS (volume only)',
                         variable=self.v_norm).grid(row=1, column=0, columnspan=4, sticky='w',
                                                    pady=(6, 0))
+        ttk.Label(af, text='Sync offset:').grid(row=2, column=0, sticky='w', pady=(6, 0))
+        off = ttk.Frame(af)
+        off.grid(row=2, column=1, columnspan=3, sticky='w', pady=(6, 0))
+        ttk.Entry(off, textvariable=self.v_offset, width=8).pack(side='left', padx=(4, 4))
+        ttk.Label(off, text='seconds — only when the encode came from a different master than '
+                            'this source. Positive if the encode starts earlier (a leader the '
+                            'source lacks). Moves the audio and the source\'s own subtitles; '
+                            'added .srt files are left alone.', foreground='#666', wraplength=430,
+                  justify='left').pack(side='left')
         r += 1
 
         # subtitles
@@ -308,7 +318,12 @@ class App(ttk.Frame):
         save_config(self.cfg)
 
         year = self.v_year.get().strip()
+        try:
+            offset = float(self.v_offset.get().strip() or 0)
+        except ValueError:
+            return messagebox.showerror(APP, 'Sync offset must be a number of seconds, e.g. 14.45')
         opts = dict(out_dir=outdir, extra_srts=list(self.srts), boost=self.v_norm.get(),
+                    offset=offset,
                     is3d={'Auto': None, '2D': False, '3D': True}[self.v_3d.get()],
                     fmt=self.v_fmt.get(), tmdb_token=self.v_token.get().strip() or None,
                     title=self.v_title.get().strip() or None,
