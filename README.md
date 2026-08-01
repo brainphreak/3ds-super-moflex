@@ -6,8 +6,6 @@ playing it as an ordinary movie.
 
 Runs on **macOS, Windows and Linux**. Python plus ffmpeg, nothing else to install.
 
-![](docs/screenshot.png)
-
 ## What it produces
 
 A normal-looking `.moflex` (the extension has to stay `.moflex`) that carries:
@@ -33,8 +31,8 @@ invisible to it.
   use *Tools ▸ Locate ffmpeg…* or drop `ffmpeg.exe`/`ffprobe.exe` in an `ffmpeg\` folder next to
   the app.
 - Disk: roughly the size of the encode plus ~600 MB per hour of audio for scratch WAVs.
-- RAM: the container is rewritten in memory, so allow about 3× the size of the encode
-  (a 1.5 GB movie wants ~4 GB free).
+- RAM: the container is rewritten in memory, so allow about 4× the size of the encode
+  (a 1.5 GB feature film peaked near 7 GB).
 
 ## Using it
 
