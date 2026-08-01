@@ -226,7 +226,7 @@ def probe_source(video):
 
 def build(video, moflex, out_path=None, out_dir=None, extra_srts=None, boost=True,
           is3d=None, fmt='converted', tmdb_token=None, title=None, year=None, poster=None,
-          audio_in=None, audio_alt=None, offset=0.0, srt_offset=0.0, meta=None,
+          audio_in=None, audio_alt=None, offset=0.0, srt_offset=0.0, meta=None, se=None,
           log=print, cancel=None):
     """Run the whole pipeline. Returns the output path. `log` is a callback for progress text,
     `cancel` an optional threading.Event that aborts at the next checkpoint."""
@@ -244,7 +244,10 @@ def build(video, moflex, out_path=None, out_dir=None, extra_srts=None, boost=Tru
     work = tempfile.mkdtemp(prefix='smoflex_',
                             dir=scratch_root if os.path.isdir(scratch_root) else None)
     try:
-        t_parsed, y_parsed, se = parse_name(video)
+        t_parsed, y_parsed, se_auto = parse_name(video)
+        # se: None = decide from the filename, False = definitely not an episode (a short or a
+        # music video whose name happens to look like one), (season, episode) = say so outright
+        se = se_auto if se is None else (None if se is False else se)
         title = title or t_parsed
         year = year if year else y_parsed
         if is3d is None:

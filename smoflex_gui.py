@@ -92,6 +92,9 @@ class App(ttk.Frame):
         self.v_runtime = tk.StringVar()
         self.v_cat = tk.StringVar(value='(auto)')
         self.v_poster = tk.StringVar()
+        self.v_kind = tk.StringVar(value='Movie')
+        self.v_season = tk.StringVar()
+        self.v_episode = tk.StringVar()
         self.v_3d = tk.StringVar(value='Auto')
         self.v_fmt = tk.StringVar(value='converted')
         self.v_status = tk.StringVar(value='Ready.')
@@ -147,42 +150,62 @@ class App(ttk.Frame):
         of = ttk.LabelFrame(self, text='Metadata', padding=6)
         of.grid(row=r, column=0, columnspan=3, sticky='ew', pady=2)
         of.columnconfigure(1, weight=1)
-        ttk.Label(of, text='Title:').grid(row=0, column=0, sticky='w')
-        ttk.Entry(of, textvariable=self.v_title).grid(row=0, column=1, sticky='ew', padx=4)
-        ttk.Label(of, text='Year:').grid(row=0, column=2, sticky='w', padx=(8, 0))
-        ttk.Entry(of, textvariable=self.v_year, width=6).grid(row=0, column=3, sticky='w', padx=4)
+        kr = ttk.Frame(of)
+        kr.grid(row=0, column=0, columnspan=4, sticky='w', pady=(0, 4))
+        ttk.Label(kr, text='This is a:').pack(side='left')
+        for k in ('Movie', 'TV episode', 'Short', 'Music video'):
+            ttk.Radiobutton(kr, text=k, value=k, variable=self.v_kind,
+                            command=self._kind_changed).pack(side='left', padx=(6, 0))
+        self.lbl_kind = ttk.Label(kr, text='', foreground='#666')
+        self.lbl_kind.pack(side='left', padx=(10, 0))
 
-        ttk.Label(of, text='Episode title:').grid(row=1, column=0, sticky='w', pady=(4, 0))
-        ttk.Entry(of, textvariable=self.v_eptitle).grid(row=1, column=1, sticky='ew', padx=4,
-                                                        pady=(4, 0))
-        ttk.Label(of, text='Aired/released:').grid(row=1, column=2, sticky='w', padx=(8, 0),
-                                                   pady=(4, 0))
-        ttk.Entry(of, textvariable=self.v_date, width=12).grid(row=1, column=3, sticky='w', padx=4,
-                                                               pady=(4, 0))
+        ttk.Label(of, text='Title:').grid(row=1, column=0, sticky='w')
+        ttk.Entry(of, textvariable=self.v_title).grid(row=1, column=1, sticky='ew', padx=4)
+        ttk.Label(of, text='Year:').grid(row=1, column=2, sticky='w', padx=(8, 0))
+        ttk.Entry(of, textvariable=self.v_year, width=6).grid(row=1, column=3, sticky='w', padx=4)
 
-        ttk.Label(of, text='Genres:').grid(row=2, column=0, sticky='w', pady=(4, 0))
-        ttk.Entry(of, textvariable=self.v_genres).grid(row=2, column=1, sticky='ew', padx=4,
+        # season / episode / episode title -- only meaningful for a TV episode, so the whole row
+        # is removed from the layout for anything else
+        self.tvrow = ttk.Frame(of)
+        self.tvrow.grid(row=2, column=0, columnspan=4, sticky='ew', pady=(4, 0))
+        ttk.Label(self.tvrow, text='Season:').pack(side='left')
+        ttk.Entry(self.tvrow, textvariable=self.v_season, width=4).pack(side='left', padx=(4, 8))
+        ttk.Label(self.tvrow, text='Episode:').pack(side='left')
+        ttk.Entry(self.tvrow, textvariable=self.v_episode, width=4).pack(side='left', padx=(4, 8))
+        ttk.Label(self.tvrow, text='Episode title:').pack(side='left')
+        ttk.Entry(self.tvrow, textvariable=self.v_eptitle).pack(side='left', fill='x', expand=True,
+                                                                padx=(4, 0))
+
+        ttk.Label(of, text='Genres:').grid(row=3, column=0, sticky='w', pady=(4, 0))
+        ttk.Entry(of, textvariable=self.v_genres).grid(row=3, column=1, sticky='ew', padx=4,
                                                        pady=(4, 0))
-        ttk.Label(of, text='Runtime (min):').grid(row=2, column=2, sticky='w', padx=(8, 0),
+        ttk.Label(of, text='Runtime (min):').grid(row=3, column=2, sticky='w', padx=(8, 0),
                                                   pady=(4, 0))
-        ttk.Entry(of, textvariable=self.v_runtime, width=6).grid(row=2, column=3, sticky='w',
+        ttk.Entry(of, textvariable=self.v_runtime, width=6).grid(row=3, column=3, sticky='w',
                                                                  padx=4, pady=(4, 0))
 
-        ttk.Label(of, text='Category:').grid(row=3, column=0, sticky='w', pady=(4, 0))
-        ttk.Combobox(of, textvariable=self.v_cat, values=['(auto)', 'Movies', 'TV Shows', 'Music',
-                                                          'Anime', 'Documentaries'],
-                     width=14).grid(row=3, column=1, sticky='w', padx=4, pady=(4, 0))
-        ttk.Label(of, text='3D:').grid(row=3, column=2, sticky='w', padx=(8, 0), pady=(4, 0))
+        ttk.Label(of, text='Category:').grid(row=4, column=0, sticky='w', pady=(4, 0))
+        # only "TV Shows" and "Music Videos" group in the library (main.c cat_grouped); music
+        # groups on the text before " - ", so those titles want to read "Artist - Song"
+        ttk.Combobox(of, textvariable=self.v_cat,
+                     values=['(auto)', 'Movies', 'TV Shows', 'Shorts', 'Music Videos'],
+                     width=14).grid(row=4, column=1, sticky='w', padx=4, pady=(4, 0))
+        ttk.Label(of, text='Aired/released:').grid(row=4, column=2, sticky='w', padx=(8, 0),
+                                                   pady=(4, 0))
+        ttk.Entry(of, textvariable=self.v_date, width=12).grid(row=4, column=3, sticky='w', padx=4,
+                                                               pady=(4, 0))
+
+        ttk.Label(of, text='3D:').grid(row=5, column=0, sticky='w', pady=(4, 0))
         f3 = ttk.Frame(of)
-        f3.grid(row=3, column=3, sticky='w', padx=4, pady=(4, 0))
+        f3.grid(row=5, column=1, sticky='w', padx=4, pady=(4, 0))
         ttk.Combobox(f3, textvariable=self.v_3d, values=['Auto', '2D', '3D'], state='readonly',
                      width=5).pack(side='left')
         ttk.Combobox(f3, textvariable=self.v_fmt, values=['converted', 'native'], state='readonly',
                      width=10).pack(side='left', padx=(4, 0))
 
-        ttk.Label(of, text='Description:').grid(row=4, column=0, sticky='nw', pady=(4, 0))
+        ttk.Label(of, text='Description:').grid(row=6, column=0, sticky='nw', pady=(4, 0))
         dfr = ttk.Frame(of)
-        dfr.grid(row=4, column=1, columnspan=3, sticky='ew', padx=4, pady=(4, 0))
+        dfr.grid(row=6, column=1, columnspan=3, sticky='ew', padx=4, pady=(4, 0))
         dfr.columnconfigure(0, weight=1)
         self.txt_desc = tk.Text(dfr, height=3, wrap='word')
         self.txt_desc.grid(row=0, column=0, sticky='ew')
@@ -190,27 +213,27 @@ class App(ttk.Frame):
         ds.grid(row=0, column=1, sticky='ns')
         self.txt_desc['yscrollcommand'] = ds.set
 
-        ttk.Label(of, text='Poster:').grid(row=5, column=0, sticky='w', pady=(4, 0))
-        ttk.Entry(of, textvariable=self.v_poster).grid(row=5, column=1, columnspan=2, sticky='ew',
+        ttk.Label(of, text='Poster:').grid(row=7, column=0, sticky='w', pady=(4, 0))
+        ttk.Entry(of, textvariable=self.v_poster).grid(row=7, column=1, columnspan=2, sticky='ew',
                                                        padx=4, pady=(4, 0))
-        ttk.Button(of, text='Browse…', command=self._pick_poster).grid(row=5, column=3, sticky='w',
+        ttk.Button(of, text='Browse…', command=self._pick_poster).grid(row=7, column=3, sticky='w',
                                                                        padx=4, pady=(4, 0))
 
-        ttk.Label(of, text='TMDB token:').grid(row=6, column=0, sticky='w', pady=(6, 0))
-        ttk.Entry(of, textvariable=self.v_token, show='•').grid(row=6, column=1, columnspan=2,
+        ttk.Label(of, text='TMDB token:').grid(row=8, column=0, sticky='w', pady=(6, 0))
+        ttk.Entry(of, textvariable=self.v_token, show='•').grid(row=8, column=1, columnspan=2,
                                                                 sticky='ew', padx=4, pady=(6, 0))
         tb = ttk.Frame(of)
-        tb.grid(row=6, column=3, sticky='w', padx=4, pady=(6, 0))
+        tb.grid(row=8, column=3, sticky='w', padx=4, pady=(6, 0))
         self.btn_look = ttk.Button(tb, text='Look up', width=8, command=self._lookup)
         self.btn_look.pack(side='left')
         ttk.Button(tb, text='Get token', width=9,
                    command=lambda: webbrowser.open('https://www.themoviedb.org/settings/api')
                    ).pack(side='left', padx=(4, 0))
-        ttk.Label(of, text='Optional: fills in title, year, genres, description and poster so the '
-                           'player needs no lookup. Build fetches it automatically — "Look up" '
-                           'just shows you what it will get first.', foreground='#666',
-                  wraplength=560, justify='left'
-                  ).grid(row=3, column=0, columnspan=4, sticky='w', pady=(4, 0))
+        self.lbl_meta = ttk.Label(of, foreground='#666', wraplength=600, justify='left',
+                                  text='Anything you type wins. "Look up" fills these in from '
+                                       'TMDB so you can check them first; Build fetches them '
+                                       'anyway for whatever you leave blank.')
+        self.lbl_meta.grid(row=9, column=0, columnspan=4, sticky='w', pady=(4, 0))
         r += 1
 
         # actions
@@ -248,6 +271,7 @@ class App(ttk.Frame):
         tools.add_command(label='About', command=self._about)
         m.add_cascade(label='Tools', menu=tools)
         self.root.config(menu=m)
+        self._kind_changed()          # start with the TV row hidden for the default kind
 
     def _file_row(self, r, label, var, cmd, hint):
         ttk.Label(self, text=label + ':').grid(row=r, column=0, sticky='w', pady=2)
@@ -396,6 +420,14 @@ class App(ttk.Frame):
         alt = next((k for k in range(len(labels)) if k != eng), None)
         self.v_aalt.set(labels[alt] if alt is not None else '(none)')
         t, y, se = sb.parse_name(path)
+        if se:                        # an SxxEyy tag in the name -> preselect TV and fill it in
+            self.v_kind.set('TV episode')
+            self.v_season.set(str(se[0]))
+            self.v_episode.set(str(se[1]))
+            self.lbl_kind['text'] = '(detected from the filename)'
+        else:
+            self.lbl_kind['text'] = '(no SxxEyy in the name — set it here if that is wrong)'
+        self._kind_changed()
         self.log(f'{os.path.basename(path)}: {len(info["audio"])} audio track(s), '
                  f'{len(info["subs"])} text subtitle track(s)'
                  + (f', {info["imagesubs"]} image subtitle track(s) that cannot be used'
@@ -405,6 +437,34 @@ class App(ttk.Frame):
         if info['imagesubs'] and not info['subs']:
             self.log('This disc rip carries picture subtitles only. Add text .srt files above if '
                      'you want subtitles in the finished file.')
+
+    # ---- kind (movie / TV episode / short / music video) -----------------------------------
+
+    def _kind_changed(self):
+        """Show the season/episode row only for TV, and steer lookup + naming to match."""
+        k = self.v_kind.get()
+        if k == 'TV episode':
+            self.tvrow.grid()
+        else:
+            self.tvrow.grid_remove()
+        # Music videos are not in TMDB, so there is nothing to look up for them
+        music = (k == 'Music video')
+        self.btn_look['state'] = 'disabled' if music else 'normal'
+        self.lbl_meta['text'] = (
+            'Music videos: name the title "Artist - Song" — the library groups them by the part '
+            'before the dash. TMDB has no music videos, so fill these in yourself.' if music else
+            'Shorts are looked up as movies on TMDB.' if k == 'Short' else
+            'The episode title goes into the filename, and the lookup fetches it along with the '
+            'air date and synopsis for that episode.' if k == 'TV episode' else
+            'Anything you type wins. "Look up" fills these in from TMDB so you can check them '
+            'first; Build fetches them anyway for whatever you leave blank.')
+
+    def _kind_se(self):
+        """(season, episode) when the fields make sense for the chosen kind, else None."""
+        if self.v_kind.get() != 'TV episode':
+            return None
+        s, e = self.v_season.get().strip(), self.v_episode.get().strip()
+        return (int(s), int(e)) if s.isdigit() and e.isdigit() else None
 
     def _lookup(self):
         """Fetch the TMDB entry now and show it, so nothing is a surprise at build time."""
@@ -416,7 +476,8 @@ class App(ttk.Frame):
         if not name:
             return messagebox.showinfo(APP, 'Choose the source video (or the .moflex) first — '
                                             'the title and year are read from its filename.')
-        t, y, se = sb.parse_name(name)
+        t, y, _ = sb.parse_name(name)
+        se = self._kind_se()          # the radio buttons decide, not the filename
         title = self.v_title.get().strip() or t
         year = self.v_year.get().strip()
         year = int(year) if year.isdigit() else y
@@ -497,6 +558,20 @@ class App(ttk.Frame):
             return messagebox.showerror(APP, 'Sync offset must be a number of seconds, e.g. 14.45')
         rt = self.v_runtime.get().strip()
         cat = self.v_cat.get().strip()
+        kind = self.v_kind.get()
+        se = self._kind_se()
+        if kind == 'TV episode' and se is None:
+            return messagebox.showerror(APP, 'Fill in the season and episode numbers, or pick a '
+                                             'different kind above.')
+        if cat in ('', '(auto)'):     # category follows the kind unless it was set by hand
+            cat = {'Movie': 'Movies', 'TV episode': 'TV Shows', 'Short': 'Shorts',
+                   'Music video': 'Music Videos'}[kind]
+        if kind == 'Music video' and ' - ' not in self.v_title.get():
+            if not messagebox.askyesno(APP, 'Music videos group by artist in the library, using '
+                                            'the text before " - " in the title.\n\nThis title '
+                                            'has no " - ", so it will not group under an artist.'
+                                            '\n\nBuild anyway?'):
+                return
         # anything typed here overrides TMDB; blank fields fall back to it (or to defaults)
         meta = {'title': self.v_title.get().strip(),
                 'year': int(year) if year.isdigit() else 0,
@@ -504,16 +579,18 @@ class App(ttk.Frame):
                 'date': self.v_date.get().strip(),
                 'genres': [g.strip() for g in self.v_genres.get().split(',') if g.strip()],
                 'runtime': int(rt) if rt.isdigit() else 0,
-                'category': '' if cat in ('', '(auto)') else cat,
+                'category': cat,
                 'desc': self.txt_desc.get('1.0', 'end').strip()}
         opts = dict(out_dir=outdir, extra_srts=list(self.srts), boost=self.v_norm.get(),
                     offset=offset,
                     is3d={'Auto': None, '2D': False, '3D': True}[self.v_3d.get()],
-                    fmt=self.v_fmt.get(), tmdb_token=self.v_token.get().strip() or None,
+                    fmt=self.v_fmt.get(),
+                    # TMDB has no music videos: a lookup there would only mismatch
+                    tmdb_token=None if kind == 'Music video' else (self.v_token.get().strip() or None),
                     title=self.v_title.get().strip() or None,
                     year=int(year) if year.isdigit() else None,
                     poster=self.v_poster.get().strip() or None,
-                    meta=meta,
+                    meta=meta, se=se if se else False,
                     audio_in=self._sel_index(self.v_ain),
                     audio_alt=self._sel_index(self.v_aalt))
 
