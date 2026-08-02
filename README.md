@@ -103,6 +103,10 @@ python3 smoflex_build.py source.mkv encoded.moflex -d ./super \
 | `smoflex_build.py` | the pipeline: probe → extract → metadata → assemble → verify (importable, and a CLI) |
 | `smoflex_core.py` | container surgery: ADPCM encoding, frame-accurate repack, trailer writing |
 
+## Licence
+
+MIT — see [LICENSE](LICENSE).
+
 ## Notes and limits
 
 - Subtitles must be **text**. PGS/VobSub tracks are reported and skipped.

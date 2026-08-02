@@ -400,8 +400,15 @@ def build(video, moflex, out_path=None, out_dir=None, extra_srts=None, boost=Tru
             args += ['--art', info['poster']]
         ck()
         log('Assembling SUPER MOFLEX (encoding audio + rewriting the container)…')
-        with contextlib.redirect_stdout(_LogStream(log)):
-            core.main_args(args)                   # in-process call (no subprocess)
+        # the repack is the long pole on a feature film, so let Cancel reach inside it
+        core.CANCEL = (lambda: cancel.is_set()) if cancel is not None else None
+        try:
+            with contextlib.redirect_stdout(_LogStream(log)):
+                core.main_args(args)               # in-process call (no subprocess)
+        except core.Aborted:
+            raise Cancelled()
+        finally:
+            core.CANCEL = None
 
         # verify the trailer wrote cleanly (an SMB/NAS write once zeroed a trailer tail, so the
         # output is always walked back after writing rather than trusted)

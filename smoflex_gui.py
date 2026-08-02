@@ -546,11 +546,6 @@ class App(ttk.Frame):
             self._ffmpeg_help()
             return
         outdir = self.v_outdir.get().strip() or os.path.join(os.path.dirname(moflex), 'super')
-        os.makedirs(outdir, exist_ok=True)
-        self.cfg['outdir'] = outdir
-        self.cfg['tmdb'] = self.v_token.get().strip()
-        save_config(self.cfg)
-
         year = self.v_year.get().strip()
         try:
             offset = float(self.v_offset.get().strip() or 0)
@@ -572,6 +567,11 @@ class App(ttk.Frame):
                                             'has no " - ", so it will not group under an artist.'
                                             '\n\nBuild anyway?'):
                 return
+        # everything validated -- only now touch the disk, so a refused build leaves nothing behind
+        os.makedirs(outdir, exist_ok=True)
+        self.cfg['outdir'] = outdir
+        self.cfg['tmdb'] = self.v_token.get().strip()
+        save_config(self.cfg)
         # anything typed here overrides TMDB; blank fields fall back to it (or to defaults)
         meta = {'title': self.v_title.get().strip(),
                 'year': int(year) if year.isdigit() else 0,

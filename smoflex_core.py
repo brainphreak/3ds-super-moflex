@@ -166,6 +166,8 @@ def adpcm_packets(pcm, channels, rate):
     out = []
     pos = 0
     while pos < total:
+        if not (pos % (PKT_SAMPLES * 64)):              # ~1.5 s of audio between checks
+            _ck()
         n = min(PKT_SAMPLES, total - pos)
         n -= n % 256                                   # subframes are exactly 256 samples
         if n <= 0:
@@ -284,6 +286,8 @@ def pack(groups, extra_desc, blocksize):
     sync_off = {}
     frame_pos = {}                                     # (g#, f#) -> [(file_off, nbytes), ...]
     for gi, g in enumerate(groups):
+        if not (gi & 63):                              # every ~64 sync groups while repacking
+            _ck()
         sync_off[gi] = len(out)
         tsb = g.ts.to_bytes(8, 'big')
         hdr = bytearray()
@@ -322,6 +326,15 @@ def pack(groups, extra_desc, blocksize):
     return bytes(out), sync_off, frame_pos
 
 # ---------------- main ----------------
+
+CANCEL = None          # optional callable set by the caller; truthy return aborts the run
+
+class Aborted(Exception):
+    """Raised out of the long loops when CANCEL() goes true, so a build can be stopped."""
+
+def _ck():
+    if CANCEL is not None and CANCEL():
+        raise Aborted()
 
 def main_args(args):
     """Same as the command line, but callable in-process:
