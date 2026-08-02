@@ -187,6 +187,11 @@ def fetch_meta(token, title, year, se, log):
         log(f"TMDB lookup failed ({ex}) — continuing without it")
         return {}
 
+def download_poster(tmdb_path, dest, size='w500'):
+    """Fetch a TMDB poster path ("/abc.jpg") to a local file and return that path."""
+    urllib.request.urlretrieve(f'https://image.tmdb.org/t/p/{size}{tmdb_path}', dest)
+    return dest
+
 IMAGE_SUBS = {'hdmv_pgs_subtitle', 'dvd_subtitle', 'dvdsub', 'xsub', 'pgssub'}
 
 def _duration(video):
@@ -365,11 +370,18 @@ def build(video, moflex, out_path=None, out_dir=None, extra_srts=None, boost=Tru
         info = {'title': title, 'year': year, 'genres': [], 'runtime': 0, 'date': '',
                 'desc': '', 'showdesc': '', 'poster': poster}
         if tmdb_token:
-            info.update({k: v for k, v in fetch_meta(tmdb_token, title, year, se, log).items() if v})
-            if info.get('poster') and not poster:
-                pj = os.path.join(work, 'poster.jpg')
-                urllib.request.urlretrieve(f"https://image.tmdb.org/t/p/w500{info['poster']}", pj)
-                info['poster'] = pj
+            fetched = fetch_meta(tmdb_token, title, year, se, log)
+            # TMDB reports the poster as a bare path ("/abc.jpg"), which is not a file: keep it
+            # out of `info` or it would overwrite a poster the caller handed us with something
+            # that cannot be opened
+            tmdb_poster = fetched.pop('poster', None)
+            info.update({k: v for k, v in fetched.items() if v})
+            if tmdb_poster and not poster:
+                try:
+                    info['poster'] = download_poster(tmdb_poster, os.path.join(work, 'poster.jpg'))
+                    log('Poster downloaded from TMDB.')
+                except Exception as ex:
+                    log(f'Poster download failed ({ex}) — building without artwork.')
         if meta:                       # hand-entered values always win over anything fetched
             info.update({k: v for k, v in meta.items() if v not in (None, '', [], 0)})
             log('Using the metadata you supplied'

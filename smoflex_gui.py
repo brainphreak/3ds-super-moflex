@@ -11,6 +11,7 @@ import os
 import queue
 import subprocess
 import sys
+import tempfile
 import threading
 import traceback
 import webbrowser
@@ -540,6 +541,15 @@ class App(ttk.Frame):
         fill(self.v_runtime, info.get('runtime'))
         if not self.txt_desc.get('1.0', 'end').strip():
             self.txt_desc.insert('1.0', (info.get('desc') or info.get('showdesc') or '').strip())
+        # pull the artwork down now and show the path, rather than leaving it to build time
+        if info.get('poster') and not self.v_poster.get().strip():
+            dest = os.path.join(tempfile.gettempdir(),
+                                'smoflex_poster_' + os.path.basename(info['poster']))
+            try:
+                self.v_poster.set(sb.download_poster(info['poster'], dest))
+                self.log(f'  poster   downloaded to {dest}')
+            except Exception as ex:
+                self.log(f'  poster   download failed ({ex}) — pick one by hand if you want art')
         self.log('Fields filled in — edit anything you like before building.')
 
     def _sel_index(self, var):
