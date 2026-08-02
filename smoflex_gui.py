@@ -231,8 +231,16 @@ class App(ttk.Frame):
         ttk.Label(of, text='Poster:').grid(row=7, column=0, sticky='w', pady=(4, 0))
         ttk.Entry(of, textvariable=self.v_poster).grid(row=7, column=1, columnspan=2, sticky='ew',
                                                        padx=4, pady=(4, 0))
-        ttk.Button(of, text='Browse…', command=self._pick_poster).grid(row=7, column=3, sticky='w',
-                                                                       padx=4, pady=(4, 0))
+        pb = ttk.Frame(of)
+        pb.grid(row=7, column=3, sticky='w', padx=4, pady=(4, 0))
+        ttk.Button(pb, text='Browse…', width=9, command=self._pick_poster).pack(side='left')
+        ttk.Button(pb, text='View', width=6, command=self._view_poster).pack(side='left', padx=(4, 0))
+        # live thumbnail of whatever is in the field (ffmpeg is already required, so it can
+        # convert a JPEG to something Tk can display)
+        self.poster_img = None
+        self.lbl_poster = ttk.Label(of)
+        self.lbl_poster.grid(row=7, column=4, rowspan=2, sticky='w', padx=(8, 0), pady=(4, 0))
+        self.v_poster.trace_add('write', lambda *a: self._poster_preview())
 
         ttk.Label(of, text='TMDB token:').grid(row=8, column=0, sticky='w', pady=(6, 0))
         ttk.Entry(of, textvariable=self.v_token, show='•').grid(row=8, column=1, columnspan=2,
@@ -342,6 +350,42 @@ class App(ttk.Frame):
                                                   ('All files', '*.*')])
         if p:
             self.v_poster.set(p)
+
+    def _view_poster(self):
+        """Open the poster full size in whatever the system uses for images."""
+        p = self.v_poster.get().strip()
+        if not p:
+            return messagebox.showinfo(APP, 'No poster chosen yet. Browse for one, or press '
+                                            'Look up to fetch the one TMDB has.')
+        if not os.path.isfile(p):
+            return messagebox.showwarning(APP, f'Not found:\n\n{p}')
+        try:
+            if sys.platform == 'darwin':
+                subprocess.run(['open', p])
+            elif sys.platform == 'win32':
+                os.startfile(p)                      # noqa: S606 - the platform's own opener
+            else:
+                subprocess.run(['xdg-open', p])
+        except Exception as ex:
+            messagebox.showwarning(APP, f'Could not open it:\n\n{ex}')
+
+    def _poster_preview(self):
+        """Show a small thumbnail of the current poster (Tk cannot read JPEG, so ffmpeg makes a
+        PNG first). Silently leaves the space blank if anything goes wrong."""
+        p = self.v_poster.get().strip()
+        self.lbl_poster.configure(image='')
+        self.poster_img = None
+        if not (p and os.path.isfile(p) and sb.tools_ready()):
+            return
+        png = os.path.join(tempfile.gettempdir(), 'smoflex_thumb.png')
+        try:
+            rc, _, _ = sb._run([sb.FFMPEG, '-y', '-v', 'error', '-i', p,
+                                '-vf', 'scale=-1:96', '-frames:v', '1', png])
+            if rc == 0 and os.path.exists(png):
+                self.poster_img = tk.PhotoImage(file=png)   # keep the reference or Tk drops it
+                self.lbl_poster.configure(image=self.poster_img)
+        except Exception:
+            pass
 
     # ---- ffmpeg presence -------------------------------------------------------------------
 
@@ -541,13 +585,20 @@ class App(ttk.Frame):
         fill(self.v_runtime, info.get('runtime'))
         if not self.txt_desc.get('1.0', 'end').strip():
             self.txt_desc.insert('1.0', (info.get('desc') or info.get('showdesc') or '').strip())
-        # pull the artwork down now and show the path, rather than leaving it to build time
+        # pull the artwork down now and show the path, rather than leaving it to build time.
+        # It goes in the output folder (named after the title) so it sits with the finished
+        # file instead of somewhere in the system temp directory.
         if info.get('poster') and not self.v_poster.get().strip():
-            dest = os.path.join(tempfile.gettempdir(),
-                                'smoflex_poster_' + os.path.basename(info['poster']))
+            name = f"{info.get('title', 'poster')} ({info.get('year', '')})".strip()
+            for bad, rep in (('/', ' - '), (':', ' -'), ('*', ''), ('?', ''), ('"', "'"),
+                             ('<', ''), ('>', ''), ('|', ''), ('\\', '')):
+                name = name.replace(bad, rep)
+            dest_dir = self.v_outdir.get().strip() or tempfile.gettempdir()
             try:
+                os.makedirs(dest_dir, exist_ok=True)
+                dest = os.path.join(dest_dir, f'{name}.jpg')
                 self.v_poster.set(sb.download_poster(info['poster'], dest))
-                self.log(f'  poster   downloaded to {dest}')
+                self.log(f'  poster   saved to {dest}')
             except Exception as ex:
                 self.log(f'  poster   download failed ({ex}) — pick one by hand if you want art')
         self.log('Fields filled in — edit anything you like before building.')
