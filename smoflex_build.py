@@ -496,6 +496,10 @@ def build(video, moflex, out_path=None, out_dir=None, extra_srts=None, boost=Tru
 
         # assemble via the core builder
         args = [moflex, out_path, '--nfo', nfo]
+        if not alt_wav:
+            # rebuilding the trailer of a file that already has one: keep whatever second
+            # audio track it carries, since none is being supplied this time
+            args.append('--keep-trailer-audio')
         if eng_wav:                         # skip_audio leaves the encode's own track alone
             args += ['--strip-audio', '--audio', eng_wav, '--lang', in_lang]
             if boost:

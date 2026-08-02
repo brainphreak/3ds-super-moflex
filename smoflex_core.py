@@ -344,7 +344,7 @@ def main_args(args):
     src, dst = args[0], args[1]
     wav_path = wav2_path = srt_path = None; audio_first = False; strip = False; norm = False
     subtype = 4; tr_wav = None; tr_srts = []; lang_main = lang_alt = None
-    nfo_path = art_path = None
+    nfo_path = art_path = None; keep_tr_audio = False
 
     def infer_lang(path):
         import re as _re
@@ -370,9 +370,29 @@ def main_args(args):
         elif args[i] == '--trailer-lang': lang_alt = args[i + 1][:3].upper(); i += 2
         elif args[i] == '--nfo': nfo_path = args[i + 1]; i += 2
         elif args[i] == '--art': art_path = args[i + 1]; i += 2
+        elif args[i] == '--keep-trailer-audio': keep_tr_audio = True; i += 1
         else: print('unknown arg', args[i]); sys.exit(1)
 
     data = open(src, 'rb').read()
+    # A source that is ALREADY a SUPER MOFLEX carries a CSXTRA payload past its last block, so
+    # the block walk would stop short of EOF and call the file corrupt. Cut the payload off,
+    # keep it, and rebuild the trailer from the new arguments.
+    old_payload = b''
+    old_sections = {}
+    if len(data) > 16 and data[-8:] == b'CSXTRA01':
+        poff = struct.unpack('<Q', data[-16:-8])[0]
+        if 0 < poff <= len(data) - 16:
+            old_payload = data[poff:-16]
+            data = data[:poff]
+            q = 0                                   # index it: 4cc -> whole section bytes
+            while q + 8 <= len(old_payload):
+                cc, ln = struct.unpack_from('<4sI', old_payload, q)
+                if ln == 0 or q + 8 + ln > len(old_payload):
+                    break
+                old_sections.setdefault(cc, old_payload[q:q + 8 + ln])
+                q += 8 + ln
+            print(f'  source already has a trailer ({len(old_payload)} B, '
+                  f'{"+".join(c.decode() for c in old_sections)}) — rebuilding it')
     groups, desc, blocksize, max_si = parse(data)
     print(f'  source: {len(data)} B, {len(groups)} sync groups, block {blocksize}, streams<= {max_si}')
 
@@ -535,7 +555,7 @@ def main_args(args):
             w += nbytes
         print(f'  seek index: {patched}/{cnt} offsets remapped')
 
-    if tr_wav or tr_srts or nfo_path or art_path:
+    if tr_wav or tr_srts or nfo_path or art_path or (keep_tr_audio and old_payload):
         payload = bytearray()
         if nfo_path:
             nfo = open(nfo_path, 'rb').read()
@@ -555,6 +575,10 @@ def main_args(args):
         if lm:
             payload += struct.pack('<4sI4s', b'LNG0', 4, lm.encode()[:3].ljust(4, b'\0'))
             print(f'  in-band language tag: {lm}')
+        elif b'LNG0' in old_sections:      # not re-tagging the in-band track: keep its label
+            payload += old_sections[b'LNG0']
+            print(f"  in-band language tag kept: "
+                  f"{old_sections[b'LNG0'][8:12].rstrip(bytes([0])).decode(errors='replace')}")
         for ts_path in tr_srts:                       # repeatable: one SUB1 per language
             srt = open(ts_path, 'rb').read()
             sl = (infer_lang_ext(ts_path) or 'SUB').encode()[:3].ljust(4, b'\0')
@@ -570,6 +594,17 @@ def main_args(args):
             la = (lang_alt or infer_lang(tr_wav) or 'ALT').encode()[:3].ljust(4, b'\0')
             payload += struct.pack('<4sIIHH4s', b'AUD1', 12 + len(blob), rate, chn, PKT_SAMPLES, la) + blob
             print(f'  trailer audio [{la.rstrip(b"\0").decode()}]: {len(apkts)} packets @{rate}Hz x{chn} ({len(blob)} B)')
+        elif keep_tr_audio and old_sections:
+            # rebuilding the trailer of a file that already had one, with no new second track
+            # supplied: carry the old audio section over untouched rather than losing it
+            for cc in (b'AUD1', b'AUD0'):
+                if cc in old_sections:
+                    sec = old_sections[cc]
+                    payload += sec
+                    # AUD1 body: u32 rate, u16 chn, u16 pktsamp, char lang[4]
+                    lang = sec[16:20].rstrip(b'\0').decode(errors='replace') if cc == b'AUD1' else '?'
+                    print(f'  trailer audio kept from the source [{lang}]: {len(sec) - 8} B')
+                    break
         base = len(out)
         out += payload + struct.pack('<Q8s', base, b'CSXTRA01')
     open(dst, 'wb').write(out)
