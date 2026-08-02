@@ -111,7 +111,7 @@ class App(ttk.Frame):
         self.v_date = tk.StringVar()
         self.v_genres = tk.StringVar()
         self.v_runtime = tk.StringVar()
-        self.v_cat = tk.StringVar(value='(auto)')
+        self.v_cat = tk.StringVar(value='Movies')
         self.v_poster = tk.StringVar()
         self.v_kind = tk.StringVar(value='Movie')
         self.v_srtcode = tk.StringVar()
@@ -237,11 +237,12 @@ class App(ttk.Frame):
         ttk.Entry(of, textvariable=self.v_runtime, width=6).grid(row=3, column=3, sticky='w',
                                                                  padx=4, pady=(4, 0))
 
-        ttk.Label(of, text='Category:').grid(row=4, column=0, sticky='w', pady=(4, 0))
-        # only "TV Shows" and "Music Videos" group in the library (main.c cat_grouped); music
-        # groups on the text before " - ", so those titles want to read "Artist - Song"
+        # The kind above decides this; it is shown (and editable) only because a library can
+        # have shelves of its own -- "Anime", "Concerts" -- that no kind maps to.
+        ttk.Label(of, text='Library shelf:').grid(row=4, column=0, sticky='w', pady=(4, 0))
         ttk.Combobox(of, textvariable=self.v_cat,
-                     values=['(auto)', 'Movies', 'TV Shows', 'Shorts', 'Music Videos'],
+                     values=['Movies', 'TV Shows', 'Shorts', 'Music Videos', 'Anime',
+                             'Concerts', 'Uncategorized'],
                      width=14).grid(row=4, column=1, sticky='w', padx=4, pady=(4, 0))
         ttk.Label(of, text='Aired/released:').grid(row=4, column=2, sticky='w', padx=(8, 0),
                                                    pady=(4, 0))
@@ -596,9 +597,15 @@ class App(ttk.Frame):
 
     # ---- kind (movie / TV episode / short / music video) -----------------------------------
 
+    KIND_SHELF = {'Movie': 'Movies', 'TV episode': 'TV Shows', 'Short': 'Shorts',
+                  'Music video': 'Music Videos'}
+
     def _kind_changed(self):
         """Show the season/episode row only for TV, and steer lookup + naming to match."""
         k = self.v_kind.get()
+        # the shelf follows the kind unless it has been pointed at something custom
+        if self.v_cat.get() in ('', '(auto)') or self.v_cat.get() in self.KIND_SHELF.values():
+            self.v_cat.set(self.KIND_SHELF.get(k, 'Movies'))
         if k == 'TV episode':
             self.tvrow.grid()
         else:
@@ -736,9 +743,8 @@ class App(ttk.Frame):
         if kind == 'TV episode' and se is None:
             return messagebox.showerror(APP, 'Fill in the season and episode numbers, or pick a '
                                              'different kind above.')
-        if cat in ('', '(auto)'):     # category follows the kind unless it was set by hand
-            cat = {'Movie': 'Movies', 'TV episode': 'TV Shows', 'Short': 'Shorts',
-                   'Music video': 'Music Videos'}[kind]
+        if cat in ('', '(auto)'):     # empty box -> fall back to whatever the kind implies
+            cat = self.KIND_SHELF.get(kind, 'Movies')
         if kind == 'Music video' and ' - ' not in self.v_title.get():
             if not messagebox.askyesno(APP, 'Music videos group by artist in the library, using '
                                             'the text before " - " in the title.\n\nThis title '
