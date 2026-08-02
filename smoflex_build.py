@@ -362,6 +362,7 @@ def probe_source(video):
 def build(video, moflex, out_path=None, out_dir=None, extra_srts=None, boost=True,
           is3d=None, fmt='converted', tmdb_token=None, title=None, year=None, poster=None,
           audio_in=None, audio_alt=None, lang_in=None, lang_alt=None, skip_audio=False,
+          use_source_subs=True,
           offset=0.0, srt_offset=0.0, meta=None, se=None, log=print, cancel=None):
     """Run the whole pipeline. Returns the output path. `log` is a callback for progress text,
     `cancel` an optional threading.Event that aborts at the next checkpoint."""
@@ -455,19 +456,28 @@ def build(video, moflex, out_path=None, out_dir=None, extra_srts=None, boost=Tru
 
         # subtitles: text tracks from the container, then any user-supplied SRTs
         srt_files = []; seen = set(); skipped = 0
-        for st in subs:
+        if subs and not use_source_subs:
+            log(f"Source has {len(subs)} subtitle track(s) — not used (the box is unticked).")
+        for st in (subs if use_source_subs else []):
             if st.get('codec_name') in IMAGE_SUBS:
                 skipped += 1; continue
-            c = to3(st.get('tags', {}).get('language', 'und'))
-            if c in seen:
-                continue
-            p = os.path.join(work, f's.{c}.srt')
-            rc, _, _ = _run([FFMPEG, '-y', '-v', 'error', '-i', video,
-                             '-map', f"0:{st['index']}", p], cancel)
+            c = to3((st.get('tags', {}) or {}).get('language', 'und'))
+            p = os.path.join(work, f's{st["index"]}.{c}.srt')
+            rc, _, err = _run([FFMPEG, '-y', '-v', 'error', '-i', video,
+                               '-map', f"0:{st['index']}", p], cancel)
             if rc == 0 and os.path.exists(p) and os.path.getsize(p) > 0:
+                # two tracks can share a language (a plain and an SDH English): keep both
                 srt_files.append((c, p, True)); seen.add(c)       # True = came from the source
+                log(f"  source subtitle track {st['index']}: {c}, {os.path.getsize(p)} B")
+            else:
+                log(f"  source subtitle track {st['index']} ({c}) could not be extracted"
+                    + (f": {err.strip()[:120]}" if err.strip() else ' (empty)'))
         if skipped:
-            log(f"NOTE: {skipped} image-based (PGS/VobSub) subtitle track(s) skipped — supply text .srt instead.")
+            log(f"NOTE: {skipped} of the source's subtitle tracks are image-based (PGS/VobSub) and "
+                f"cannot be used — they are pictures, not text. Add text .srt files instead.")
+        if use_source_subs and not subs:
+            log('Source has no subtitle tracks of its own.'
+                if video else 'No source video, so no subtitles could come from one.')
         # ENG is the default track (first wins), JPN next, everything else alphabetical
         _rank = {'ENG': 0, 'JPN': 1}
         srt_files.sort(key=lambda x: (_rank.get(x[0], 9), x[0]))

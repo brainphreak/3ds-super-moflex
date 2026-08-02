@@ -116,6 +116,7 @@ class App(ttk.Frame):
         self.v_kind = tk.StringVar(value='Movie')
         self.v_srtcode = tk.StringVar()
         self.v_skipaudio = tk.BooleanVar(value=False)
+        self.v_srcsubs = tk.BooleanVar(value=True)
         self.v_lang_in = tk.StringVar(value='ENG')
         self.v_lang_alt = tk.StringVar(value='JPN')
         self.v_season = tk.StringVar()
@@ -193,10 +194,14 @@ class App(ttk.Frame):
         mv.pack(fill='x', pady=(8, 0))
         ttk.Button(mv, text='↑', width=4, command=lambda: self._move_srt(-1)).pack(side='left')
         ttk.Button(mv, text='↓', width=4, command=lambda: self._move_srt(1)).pack(side='left', padx=(3, 0))
+        ttk.Checkbutton(sf, text="Also include the subtitle tracks inside the source video "
+                                    "(text tracks only — picture subtitles cannot be used)",
+                        variable=self.v_srcsubs).grid(row=1, column=0, columnspan=2, sticky='w',
+                                                      pady=(4, 0))
         ttk.Label(sf, text='The language code is what the player shows — pick a row, type a '
                            '3-letter code (ENG, JPN, FRE…) and press Set. Order matters: the top '
                            'one is the default track.', foreground='#666', wraplength=560,
-                  justify='left').grid(row=1, column=0, columnspan=2, sticky='w', pady=(4, 0))
+                  justify='left').grid(row=2, column=0, columnspan=2, sticky='w', pady=(4, 0))
         r += 1
 
         # metadata / options
@@ -775,7 +780,7 @@ class App(ttk.Frame):
                     year=int(year) if year.isdigit() else None,
                     poster=self.v_poster.get().strip() or None,
                     meta=meta, se=se if se else False,
-                    skip_audio=skip_audio,
+                    skip_audio=skip_audio, use_source_subs=self.v_srcsubs.get(),
                     lang_in=self.v_lang_in.get().strip().upper() or None,
                     lang_alt=self.v_lang_alt.get().strip().upper() or None,
                     audio_in=self._sel_index(self.v_ain),
