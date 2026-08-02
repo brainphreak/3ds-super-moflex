@@ -147,18 +147,71 @@ LANGNAMES = {           # subtitle sites label files by name as often as by code
     'latin': 'LAT', 'sdh': 'SDH', 'signs': 'SGN', 'forced': 'SGN',
 }
 
+# ---- what the player can actually draw -----------------------------------------------------
+# Kept in step with the player's glyph tables (playback/font8x8_ext.h, playback/font16.h).
+# 8x8 covers the scripts that fit an 8-pixel cell; 16x16 covers the ones that cannot possibly
+# (Hangul stacks three jamo, kanji carry far more strokes than 64 pixels hold).
+
+def _fits8(cp):
+    return (0x20 <= cp <= 0x7E or 0xA0 <= cp <= 0xFF        # ASCII + Latin-1
+            or 0x100 <= cp <= 0x17F                          # Latin Extended-A (incl. Turkish)
+            or 0x386 <= cp <= 0x3CE                          # Greek
+            or 0x400 <= cp <= 0x45F                          # Cyrillic
+            or 0x590 <= cp <= 0x5FF                          # Hebrew
+            or 0x2010 <= cp <= 0x203A or cp in (0x20AC, 0x266A, 0x266B))
+
+def _jis_level1(cp):
+    b = chr(cp).encode('shift_jis', 'ignore')                # the common kanji, not level 2
+    return bool(b) and len(b) == 2 and 0x88 <= b[0] <= 0x98
+
+def _ks_x_1001(cp):
+    b = chr(cp).encode('cp949', 'ignore')                    # the standard Korean syllable set
+    return len(b) == 2 and 0xB0 <= b[0] <= 0xC8 and b[1] >= 0xA1
+
+def _fits16(cp):
+    if 0x3000 <= cp <= 0x30FF:                               # kana + CJK punctuation
+        return True
+    if 0xAC00 <= cp <= 0xD7A3:
+        return _ks_x_1001(cp)
+    if 0x4E00 <= cp <= 0x9FFF:
+        return _jis_level1(cp)
+    return cp in (0x3005, 0x303B, 0xFF01, 0xFF1F)
+
 def _renderable(cp):
-    """Roughly what the player's 8x8 subtitle font can draw: ASCII, Latin-1, Latin Extended-A,
-    Greek, Cyrillic, Hebrew and common punctuation. No CJK, no Hangul, no Arabic — those need
-    thousands of glyphs (or contextual shaping) that a bitmap font of this kind cannot hold."""
-    return (cp < 0x80 or 0xA0 <= cp <= 0xFF or 0x100 <= cp <= 0x17F
-            or 0x386 <= cp <= 0x3CE or 0x400 <= cp <= 0x45F or 0x590 <= cp <= 0x5FF
-            or 0x2010 <= cp <= 0x203A or cp in (0x266A, 0x266B))
+    return _fits8(cp) or _fits16(cp)
+
+# script of a codepoint, for telling someone WHICH language will not display
+_SCRIPTS = [
+    (0x0600, 0x06FF, 'Arabic'),      (0x0700, 0x074F, 'Syriac'),
+    (0x0900, 0x097F, 'Devanagari'),  (0x0980, 0x09FF, 'Bengali'),
+    (0x0B80, 0x0BFF, 'Tamil'),       (0x0E00, 0x0E7F, 'Thai'),
+    (0x0E80, 0x0EFF, 'Lao'),         (0x1000, 0x109F, 'Burmese'),
+    (0x10A0, 0x10FF, 'Georgian'),    (0x0530, 0x058F, 'Armenian'),
+    (0x1200, 0x137F, 'Ethiopic'),    (0xAC00, 0xD7A3, 'rare Hangul'),
+    (0x4E00, 0x9FFF, 'Chinese, or rare kanji'),
+]
+
+def script_of(cp):
+    for lo, hi, name in _SCRIPTS:
+        if lo <= cp <= hi:
+            return name
+    return 'unsupported characters'
+
+SUPPORTED = [       # (script, cell, languages) -- also the table in the README
+    ('Latin + Extended-A', '8x8', 'English, Spanish, French, German, Italian, Portuguese, Dutch, '
+                                  'Polish, Czech, Slovak, Hungarian, Romanian, Croatian, Turkish, '
+                                  'Nordic languages, Vietnamese (unaccented)'),
+    ('Greek', '8x8', 'Greek'),
+    ('Cyrillic', '8x8', 'Russian, Ukrainian, Bulgarian, Serbian, Macedonian'),
+    ('Hebrew', '8x8', 'Hebrew (no right-to-left layout)'),
+    ('Kana + JIS level 1 kanji', '16x16', 'Japanese'),
+    ('Hangul (KS X 1001)', '16x16', 'Korean'),
+]
 
 _INVISIBLE = dict.fromkeys([0x200B, 0x200C, 0x200D, 0x200E, 0x200F, 0xFEFF], None)
 
 def check_srt_text(path):
-    """(unsupported_fraction, sample) for a subtitle file, judged by the player's font."""
+    """(unsupported_fraction, sample, script) for a subtitle file, judged by the player's fonts."""
     try:
         with open(path, encoding='utf-8', errors='replace') as f:
             body = f.read()
@@ -168,7 +221,8 @@ def check_srt_text(path):
     chars = [c for c in body if not c.isspace()]
     bad = [c for c in chars if not _renderable(ord(c))]
     sample = ''.join(sorted(set(bad))[:10])
-    return (len(bad) / len(chars) if chars else 0.0), sample
+    script = script_of(ord(bad[len(bad) // 2])) if bad else ''
+    return (len(bad) / len(chars) if chars else 0.0), sample, script
 
 def srt_lang(path):
     """Best guess at a subtitle file's language. Handles 'Movie.eng.srt', 'Movie-en.srt',
@@ -461,13 +515,14 @@ def build(video, moflex, out_path=None, out_dir=None, extra_srts=None, boost=Tru
             if cleaned != body:
                 with open(dst, 'w', encoding='utf-8') as f:
                     f.write(cleaned)
-            frac, sample = check_srt_text(dst)
+            frac, sample, script = check_srt_text(dst)
             if frac > 0.2:
-                log(f'WARNING: {c} subtitles are {frac*100:.0f}% characters the player cannot '
-                    f'draw ({sample}) — its font has no glyphs for this script, so they will '
-                    f'show as "?". Consider leaving this track out.')
+                log(f'WARNING: the {c} track is {script} — the player has no glyphs for it, so '
+                    f'every line would show as "?" ({frac*100:.0f}% of characters, e.g. {sample}). '
+                    f'Leave this track out.')
             elif frac > 0.01:
-                log(f'NOTE: {c} subtitles contain {frac*100:.1f}% characters with no glyph.')
+                log(f'NOTE: {c} has {frac*100:.1f}% characters with no glyph ({sample}) — mostly '
+                    f'they will show as "?".')
             moved.append((c, dst))
         srt_files = moved
         if offset or srt_offset:
