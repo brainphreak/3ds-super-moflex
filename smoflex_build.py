@@ -147,6 +147,29 @@ LANGNAMES = {           # subtitle sites label files by name as often as by code
     'latin': 'LAT', 'sdh': 'SDH', 'signs': 'SGN', 'forced': 'SGN',
 }
 
+def _renderable(cp):
+    """Roughly what the player's 8x8 subtitle font can draw: ASCII, Latin-1, Latin Extended-A,
+    Greek, Cyrillic, Hebrew and common punctuation. No CJK, no Hangul, no Arabic — those need
+    thousands of glyphs (or contextual shaping) that a bitmap font of this kind cannot hold."""
+    return (cp < 0x80 or 0xA0 <= cp <= 0xFF or 0x100 <= cp <= 0x17F
+            or 0x386 <= cp <= 0x3CE or 0x400 <= cp <= 0x45F or 0x590 <= cp <= 0x5FF
+            or 0x2010 <= cp <= 0x203A or cp in (0x266A, 0x266B))
+
+_INVISIBLE = dict.fromkeys([0x200B, 0x200C, 0x200D, 0x200E, 0x200F, 0xFEFF], None)
+
+def check_srt_text(path):
+    """(unsupported_fraction, sample) for a subtitle file, judged by the player's font."""
+    try:
+        with open(path, encoding='utf-8', errors='replace') as f:
+            body = f.read()
+    except OSError:
+        return 0.0, ''
+    body = re.sub(r'\d\d:\d\d:\d\d[,.]\d\d\d --> .*|^\d+$', '', body, flags=re.M)
+    chars = [c for c in body if not c.isspace()]
+    bad = [c for c in chars if not _renderable(ord(c))]
+    sample = ''.join(sorted(set(bad))[:10])
+    return (len(bad) / len(chars) if chars else 0.0), sample
+
 def srt_lang(path):
     """Best guess at a subtitle file's language. Handles 'Movie.eng.srt', 'Movie-en.srt',
     'Movie_es-419.srt' and 'Movie.English.srt'. Returns None when there is nothing to go on.
@@ -431,6 +454,20 @@ def build(video, moflex, out_path=None, out_dir=None, extra_srts=None, boost=Tru
                 shift_srt(p, dst, sh)
             elif os.path.abspath(p) != os.path.abspath(dst):
                 shutil.copyfile(p, dst)
+            # zero-width marks and BOMs have no glyph and would show as '?'
+            with open(dst, encoding='utf-8', errors='replace') as f:
+                body = f.read()
+            cleaned = body.translate(_INVISIBLE)
+            if cleaned != body:
+                with open(dst, 'w', encoding='utf-8') as f:
+                    f.write(cleaned)
+            frac, sample = check_srt_text(dst)
+            if frac > 0.2:
+                log(f'WARNING: {c} subtitles are {frac*100:.0f}% characters the player cannot '
+                    f'draw ({sample}) — its font has no glyphs for this script, so they will '
+                    f'show as "?". Consider leaving this track out.')
+            elif frac > 0.01:
+                log(f'NOTE: {c} subtitles contain {frac*100:.1f}% characters with no glyph.')
             moved.append((c, dst))
         srt_files = moved
         if offset or srt_offset:
