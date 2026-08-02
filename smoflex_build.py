@@ -90,19 +90,32 @@ def _run(cmd, cancel=None, capture=False):
     return p.returncode, (out or ''), (err or '')
 
 class _LogStream:
-    """File-like sink so the core builder's print() output lands in the GUI log."""
+    """File-like sink so the core builder's print() output lands in the GUI log.
+
+    Guards against a log callback that prints: stdout is redirected here while the core runs,
+    so log -> print -> write -> log would recurse until the stack blew up."""
     def __init__(self, log):
         self.log = log
         self.buf = ''
+        self._busy = False
     def write(self, s):
         self.buf += s
         while '\n' in self.buf:
             line, self.buf = self.buf.split('\n', 1)
-            if line.strip():
-                self.log(line.rstrip())
+            if line.strip() and not self._busy:
+                self._busy = True
+                try:
+                    self.log(line.rstrip())
+                finally:
+                    self._busy = False
+        return len(s)
     def flush(self):
-        if self.buf.strip():
-            self.log(self.buf.rstrip())
+        if self.buf.strip() and not self._busy:
+            self._busy = True
+            try:
+                self.log(self.buf.rstrip())
+            finally:
+                self._busy = False
         self.buf = ''
 
 # ---- language code helpers ----------------------------------------------------------------
@@ -226,8 +239,8 @@ def probe_source(video):
 
 def build(video, moflex, out_path=None, out_dir=None, extra_srts=None, boost=True,
           is3d=None, fmt='converted', tmdb_token=None, title=None, year=None, poster=None,
-          audio_in=None, audio_alt=None, offset=0.0, srt_offset=0.0, meta=None, se=None,
-          log=print, cancel=None):
+          audio_in=None, audio_alt=None, lang_in=None, lang_alt=None,
+          offset=0.0, srt_offset=0.0, meta=None, se=None, log=print, cancel=None):
     """Run the whole pipeline. Returns the output path. `log` is a callback for progress text,
     `cancel` an optional threading.Event that aborts at the next checkpoint."""
     extra_srts = extra_srts or []
@@ -241,6 +254,9 @@ def build(video, moflex, out_path=None, out_dir=None, extra_srts=None, boost=Tru
     # scratch next to the output when we can: temp dirs are often on a small system volume and
     # the WAVs run ~600 MB per hour of audio.
     scratch_root = os.path.abspath(out_dir or os.path.dirname(os.path.abspath(out_path or moflex)))
+    os.makedirs(scratch_root, exist_ok=True)     # the CLI can be pointed at a folder that is
+                                                 # not there yet; the core would fail at the
+                                                 # final write, after all the work was done
     work = tempfile.mkdtemp(prefix='smoflex_',
                             dir=scratch_root if os.path.isdir(scratch_root) else None)
     try:
@@ -271,7 +287,13 @@ def build(video, moflex, out_path=None, out_dir=None, extra_srts=None, boost=Tru
             a_alt = next((s for s in audio if s is not a_eng), None)
         if a_alt is a_eng:
             a_alt = None
-        alt_lang = to3((a_alt.get('tags', {}) or {}).get('language', 'und')) if a_alt else None
+        # A rip with no language tags probes as UND, and UND is what the player would show on
+        # the audio button. Caller-supplied labels win; otherwise fall back to the tag, and to
+        # ENG for the in-band track (the one every player hears).
+        det_in = to3((a_eng.get('tags', {}) or {}).get('language', 'und'))
+        det_alt = to3((a_alt.get('tags', {}) or {}).get('language', 'und')) if a_alt else None
+        in_lang = (lang_in or (det_in if det_in != 'UND' else 'ENG')).upper()[:3]
+        alt_lang = ((lang_alt or det_alt or 'UND').upper()[:3]) if a_alt else None
 
         # An encode often starts from a different master than the source file: a distributor
         # logo the rip lacks, a trimmed head, and so on. `offset` slides everything taken from
@@ -294,7 +316,7 @@ def build(video, moflex, out_path=None, out_dir=None, extra_srts=None, boost=Tru
                 raise RuntimeError(f'audio extraction failed: {err.strip()[:200]}')
             return p
         lang_of = lambda s: (s.get('tags', {}) or {}).get('language', 'und')
-        log(f"Extracting audio (in-band {to3(lang_of(a_eng))}"
+        log(f"Extracting audio (in-band {in_lang}"
             + (f" + trailer {alt_lang}" if a_alt else '') + ') — this is the slow part…')
         eng_wav = wav(a_eng, 'eng')
         ck()
@@ -389,7 +411,8 @@ def build(video, moflex, out_path=None, out_dir=None, extra_srts=None, boost=Tru
             out_path = os.path.join(out_dir or os.path.dirname(os.path.abspath(moflex)), base)
 
         # assemble via the core builder
-        args = [moflex, out_path, '--strip-audio', '--audio', eng_wav, '--lang', 'ENG', '--nfo', nfo]
+        args = [moflex, out_path, '--strip-audio', '--audio', eng_wav, '--lang', in_lang,
+                '--nfo', nfo]
         if boost:
             args.append('--normalize')
         if alt_wav:
@@ -403,8 +426,11 @@ def build(video, moflex, out_path=None, out_dir=None, extra_srts=None, boost=Tru
         # the repack is the long pole on a feature film, so let Cancel reach inside it
         core.CANCEL = (lambda: cancel.is_set()) if cancel is not None else None
         try:
-            with contextlib.redirect_stdout(_LogStream(log)):
-                core.main_args(args)               # in-process call (no subprocess)
+            if log is print:                       # console already: no redirect, no loop risk
+                core.main_args(args)
+            else:
+                with contextlib.redirect_stdout(_LogStream(log)):
+                    core.main_args(args)           # in-process call (no subprocess)
         except core.Aborted:
             raise Cancelled()
         finally:
@@ -474,6 +500,9 @@ def _cli(argv):
                     help='same, for --srt files only; they are usually already timed to the '
                          'encode\'s master, so this defaults to 0')
     ap.add_argument('--poster', help='poster image to embed (default: TMDB, if a token is set)')
+    ap.add_argument('--lang', help='3-letter code for the in-band track (default ENG, or the '
+                                   'source tag when it has one)')
+    ap.add_argument('--alt-lang', help='3-letter code for the trailer track')
     ap.add_argument('--genres', help='comma separated, e.g. "Fantasy, Animation"')
     ap.add_argument('--runtime', type=int, help='minutes')
     ap.add_argument('--category', help='library category (default: Movies, or TV Shows for SxxEyy)')
@@ -493,7 +522,8 @@ def _cli(argv):
         build(a.video, a.moflex, out_path=a.out, out_dir=a.outdir, extra_srts=a.srt,
               boost=not a.no_normalize, is3d=is3d, fmt=a.format, tmdb_token=a.tmdb,
               title=a.title, year=a.year, poster=a.poster, offset=a.offset,
-              srt_offset=a.srt_offset, meta=meta)
+              srt_offset=a.srt_offset, meta=meta,
+              lang_in=a.lang, lang_alt=a.alt_lang)
     except (RuntimeError, Cancelled) as ex:
         print(f'error: {ex}', file=sys.stderr)
         return 1

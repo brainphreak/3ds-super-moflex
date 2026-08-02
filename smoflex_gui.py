@@ -25,6 +25,8 @@ CONFIG = os.path.join(os.path.expanduser('~'), '.smoflex_gui.json')
 VIDEO_TYPES = [('Video files', '*.mkv *.mp4 *.m4v *.mov *.avi *.ts'), ('All files', '*.*')]
 MOFLEX_TYPES = [('Moflex video', '*.moflex'), ('All files', '*.*')]
 SRT_TYPES = [('Subtitles', '*.srt *.ass *.ssa *.vtt'), ('All files', '*.*')]
+LANGS = ['ENG', 'JPN', 'FRE', 'GER', 'SPA', 'CAS', 'ITA', 'POR', 'RUS', 'KOR',
+         'CHI', 'TUR', 'POL', 'GRE', 'FIN', 'TGL', 'DUT', 'SWE']
 
 
 def load_config():
@@ -93,6 +95,8 @@ class App(ttk.Frame):
         self.v_cat = tk.StringVar(value='(auto)')
         self.v_poster = tk.StringVar()
         self.v_kind = tk.StringVar(value='Movie')
+        self.v_lang_in = tk.StringVar(value='ENG')
+        self.v_lang_alt = tk.StringVar(value='JPN')
         self.v_season = tk.StringVar()
         self.v_episode = tk.StringVar()
         self.v_3d = tk.StringVar(value='Auto')
@@ -114,17 +118,27 @@ class App(ttk.Frame):
         af.columnconfigure(1, weight=1)
         af.columnconfigure(3, weight=1)
         ttk.Label(af, text='In-band (all players):').grid(row=0, column=0, sticky='w')
-        self.cb_ain = ttk.Combobox(af, textvariable=self.v_ain, state='readonly', width=28)
+        self.cb_ain = ttk.Combobox(af, textvariable=self.v_ain, state='readonly', width=24)
         self.cb_ain.grid(row=0, column=1, sticky='ew', padx=4)
         ttk.Label(af, text='Second track:').grid(row=0, column=2, sticky='w', padx=(10, 0))
-        self.cb_aalt = ttk.Combobox(af, textvariable=self.v_aalt, state='readonly', width=28)
+        self.cb_aalt = ttk.Combobox(af, textvariable=self.v_aalt, state='readonly', width=24)
         self.cb_aalt.grid(row=0, column=3, sticky='ew', padx=4)
+        # a rip with no language tags probes as UND; these are the labels the player shows on
+        # its audio button, so they are editable rather than taken on faith from the container
+        ttk.Label(af, text='Label them:').grid(row=1, column=0, sticky='w', pady=(4, 0))
+        lf = ttk.Frame(af)
+        lf.grid(row=1, column=1, columnspan=3, sticky='w', padx=4, pady=(4, 0))
+        ttk.Combobox(lf, textvariable=self.v_lang_in, values=LANGS, width=6).pack(side='left')
+        ttk.Label(lf, text='and').pack(side='left', padx=6)
+        ttk.Combobox(lf, textvariable=self.v_lang_alt, values=LANGS, width=6).pack(side='left')
+        ttk.Label(lf, text='— three-letter codes, shown on the audio button in the player',
+                  foreground='#666').pack(side='left', padx=(8, 0))
         ttk.Checkbutton(af, text='Normalize both to −1 dBFS (volume only)',
-                        variable=self.v_norm).grid(row=1, column=0, columnspan=4, sticky='w',
+                        variable=self.v_norm).grid(row=2, column=0, columnspan=4, sticky='w',
                                                    pady=(6, 0))
-        ttk.Label(af, text='Sync offset:').grid(row=2, column=0, sticky='w', pady=(6, 0))
+        ttk.Label(af, text='Sync offset:').grid(row=3, column=0, sticky='w', pady=(6, 0))
         off = ttk.Frame(af)
-        off.grid(row=2, column=1, columnspan=3, sticky='w', pady=(6, 0))
+        off.grid(row=3, column=1, columnspan=3, sticky='w', pady=(6, 0))
         ttk.Entry(off, textvariable=self.v_offset, width=8).pack(side='left', padx=(4, 4))
         ttk.Label(off, text='seconds — only when the encode came from a different master than '
                             'this source. Positive if the encode starts earlier (a leader the '
@@ -419,6 +433,14 @@ class App(ttk.Frame):
         self.v_ain.set(labels[eng] if labels else '')
         alt = next((k for k in range(len(labels)) if k != eng), None)
         self.v_aalt.set(labels[alt] if alt is not None else '(none)')
+        def code_of(k):
+            return info['audio'][k][1].split()[0] if 0 <= k < len(info['audio']) else ''
+        ci, ca = code_of(eng), code_of(alt if alt is not None else -1)
+        self.v_lang_in.set(ci if ci and ci != 'UND' else 'ENG')
+        self.v_lang_alt.set(ca if ca and ca != 'UND' else ('JPN' if alt is not None else ''))
+        if 'UND' in (ci, ca):
+            self.log('This file has untagged audio (UND) — set the labels under the track '
+                     'menus so the player shows the right languages.')
         t, y, se = sb.parse_name(path)
         if se:                        # an SxxEyy tag in the name -> preselect TV and fill it in
             self.v_kind.set('TV episode')
@@ -591,6 +613,8 @@ class App(ttk.Frame):
                     year=int(year) if year.isdigit() else None,
                     poster=self.v_poster.get().strip() or None,
                     meta=meta, se=se if se else False,
+                    lang_in=self.v_lang_in.get().strip().upper() or None,
+                    lang_alt=self.v_lang_alt.get().strip().upper() or None,
                     audio_in=self._sel_index(self.v_ain),
                     audio_alt=self._sel_index(self.v_aalt))
 
@@ -682,10 +706,17 @@ class App(ttk.Frame):
         try:
             while True:
                 item = self.q.get_nowait()
-                if isinstance(item, tuple):
-                    self._finish(*item)
-                else:
+                if not isinstance(item, tuple):
                     self.log(item)
+                    continue
+                # worker threads post (what, payload); a lookup result is NOT a build result,
+                # and routing it into _finish() reported a failed build and left the Look up
+                # button disabled with no way back
+                what, payload = item
+                if what == 'lookup':
+                    self._show_lookup(payload)
+                else:
+                    self._finish(what, payload)
         except queue.Empty:
             pass
         self.root.after(100, self._poll_log)
