@@ -96,6 +96,8 @@ class App(ttk.Frame):
         self.v_cat = tk.StringVar(value='(auto)')
         self.v_poster = tk.StringVar()
         self.v_kind = tk.StringVar(value='Movie')
+        self.v_srtcode = tk.StringVar()
+        self.v_skipaudio = tk.BooleanVar(value=False)
         self.v_lang_in = tk.StringVar(value='ENG')
         self.v_lang_alt = tk.StringVar(value='JPN')
         self.v_season = tk.StringVar()
@@ -137,6 +139,10 @@ class App(ttk.Frame):
         ttk.Checkbutton(af, text='Normalize both to −1 dBFS (volume only)',
                         variable=self.v_norm).grid(row=2, column=0, columnspan=4, sticky='w',
                                                    pady=(6, 0))
+        ttk.Checkbutton(af, text='Keep the audio already in the .moflex — subtitles and metadata '
+                                 'only (much faster; no source video needed)',
+                        variable=self.v_skipaudio, command=self._skip_audio_changed
+                        ).grid(row=4, column=0, columnspan=4, sticky='w', pady=(6, 0))
         ttk.Label(af, text='Sync offset:').grid(row=3, column=0, sticky='w', pady=(6, 0))
         off = ttk.Frame(af)
         off.grid(row=3, column=1, columnspan=3, sticky='w', pady=(6, 0))
@@ -153,12 +159,26 @@ class App(ttk.Frame):
                             padding=6)
         sf.grid(row=r, column=0, columnspan=3, sticky='ew', pady=2)
         sf.columnconfigure(0, weight=1)
-        self.lst = tk.Listbox(sf, height=4, activestyle='none')
-        self.lst.grid(row=0, column=0, rowspan=2, sticky='ew')
-        ttk.Button(sf, text='Add…', command=self._add_srt).grid(row=0, column=1, sticky='ew', padx=4)
-        ttk.Button(sf, text='Remove', command=self._del_srt).grid(row=1, column=1, sticky='ew', padx=4)
-        ttk.Label(sf, text='Name them "Movie.eng.srt", "Movie.jpn.srt" … so each track is labelled.',
-                  foreground='#666').grid(row=2, column=0, columnspan=2, sticky='w', pady=(4, 0))
+        self.lst = tk.Listbox(sf, height=6, activestyle='none', exportselection=False,
+                              font=('Menlo' if sys.platform == 'darwin' else 'Consolas', 11))
+        self.lst.grid(row=0, column=0, sticky='ew')
+        self.lst.bind('<<ListboxSelect>>', self._srt_selected)
+        sb_side = ttk.Frame(sf)
+        sb_side.grid(row=0, column=1, sticky='n', padx=4)
+        ttk.Button(sb_side, text='Add…', width=9, command=self._add_srt).pack(fill='x')
+        ttk.Button(sb_side, text='Remove', width=9, command=self._del_srt).pack(fill='x', pady=(3, 8))
+        code = ttk.Frame(sb_side)
+        code.pack(fill='x')
+        ttk.Entry(code, textvariable=self.v_srtcode, width=5).pack(side='left')
+        ttk.Button(code, text='Set', width=4, command=self._set_srt_code).pack(side='left', padx=(3, 0))
+        mv = ttk.Frame(sb_side)
+        mv.pack(fill='x', pady=(8, 0))
+        ttk.Button(mv, text='↑', width=4, command=lambda: self._move_srt(-1)).pack(side='left')
+        ttk.Button(mv, text='↓', width=4, command=lambda: self._move_srt(1)).pack(side='left', padx=(3, 0))
+        ttk.Label(sf, text='The language code is what the player shows — pick a row, type a '
+                           '3-letter code (ENG, JPN, FRE…) and press Set. Order matters: the top '
+                           'one is the default track.', foreground='#666', wraplength=560,
+                  justify='left').grid(row=1, column=0, columnspan=2, sticky='w', pady=(4, 0))
         r += 1
 
         # metadata / options
@@ -444,19 +464,70 @@ class App(ttk.Frame):
         if messagebox.askyesno(APP, body + '\n\nOpen the download page now?'):
             webbrowser.open(url)
 
+    # ---- subtitle list: each row is [path, 3-letter code], first row = default track ---------
+
+    def _refresh_srts(self, select=None):
+        self.lst.delete(0, 'end')
+        for i, (p, c) in enumerate(self.srts):
+            self.lst.insert('end', f'{c:<4} {os.path.basename(p)}'
+                            + ('   (default)' if i == 0 else ''))
+        if select is not None and 0 <= select < len(self.srts):
+            self.lst.selection_set(select)
+            self.lst.see(select)
+            self.v_srtcode.set(self.srts[select][1])
+
     def _add_srt(self):
         for p in filedialog.askopenfilenames(title='Subtitle files', filetypes=SRT_TYPES,
                                              initialdir=self.cfg.get('srtdir', '')):
-            if p not in self.srts:
-                self.srts.append(p)
-                self.lst.insert('end', os.path.basename(p))
-                self.cfg['srtdir'] = os.path.dirname(p)
+            if any(p == q for q, _ in self.srts):
+                continue
+            self.srts.append([p, sb.srt_lang(p) or 'SUB'])       # guess now, editable after
+            self.cfg['srtdir'] = os.path.dirname(p)
         save_config(self.cfg)
+        self._refresh_srts(len(self.srts) - 1)
+        if any(c == 'SUB' for _, c in self.srts):
+            self.log('Some subtitles have no language in their filename — select each one, type '
+                     'its code and press Set.')
 
     def _del_srt(self):
-        for i in reversed(self.lst.curselection()):
-            self.lst.delete(i)
+        sel = list(self.lst.curselection())
+        for i in reversed(sel):
             del self.srts[i]
+        self._refresh_srts(sel[0] - 1 if sel and sel[0] else None)
+
+    def _skip_audio_changed(self):
+        """Grey out the audio controls when the encode's own audio is being kept."""
+        state = 'disabled' if self.v_skipaudio.get() else 'readonly'
+        self.cb_ain.configure(state=state)
+        self.cb_aalt.configure(state=state)
+        if self.v_skipaudio.get():
+            self.log('Audio will be left exactly as it is in the .moflex; only the trailer is '
+                     'rebuilt. A source video is optional now — add .srt files below.')
+
+    def _srt_selected(self, _evt=None):
+        sel = self.lst.curselection()
+        if sel:
+            self.v_srtcode.set(self.srts[sel[0]][1])
+
+    def _set_srt_code(self):
+        sel = self.lst.curselection()
+        if not sel:
+            return messagebox.showinfo(APP, 'Select a subtitle row first, then type its code.')
+        c = self.v_srtcode.get().strip().upper()[:3]
+        if not c.isalpha():
+            return messagebox.showwarning(APP, 'A language code is 2-3 letters, like ENG or JPN.')
+        self.srts[sel[0]][1] = c
+        self._refresh_srts(sel[0])
+
+    def _move_srt(self, delta):
+        sel = self.lst.curselection()
+        if not sel:
+            return
+        i = sel[0]
+        j = i + delta
+        if 0 <= j < len(self.srts):
+            self.srts[i], self.srts[j] = self.srts[j], self.srts[i]
+            self._refresh_srts(j)
 
     # ---- source probe ---------------------------------------------------------------------
 
@@ -621,8 +692,14 @@ class App(ttk.Frame):
 
     def _start(self):
         video, moflex = self.v_video.get().strip(), self.v_moflex.get().strip()
+        skip_audio = self.v_skipaudio.get()
         if not (video and os.path.isfile(video)):
-            return messagebox.showerror(APP, 'Choose the source video first.')
+            if not skip_audio:
+                return messagebox.showerror(APP, 'Choose the source video first.')
+            video = None            # subtitles/metadata only: nothing is taken from a source
+        if skip_audio and not self.srts and not self.v_token.get().strip():
+            return messagebox.showerror(APP, 'Nothing to add: with the audio kept as-is, add '
+                                             'subtitle files or fill in metadata first.')
         if not (moflex and os.path.isfile(moflex)):
             return messagebox.showerror(APP, 'Choose the encoded .moflex first.')
         if not sb.tools_ready():
@@ -664,7 +741,7 @@ class App(ttk.Frame):
                 'runtime': int(rt) if rt.isdigit() else 0,
                 'category': cat,
                 'desc': self.txt_desc.get('1.0', 'end').strip()}
-        opts = dict(out_dir=outdir, extra_srts=list(self.srts), boost=self.v_norm.get(),
+        opts = dict(out_dir=outdir, extra_srts=[(c, p) for p, c in self.srts], boost=self.v_norm.get(),
                     offset=offset,
                     is3d={'Auto': None, '2D': False, '3D': True}[self.v_3d.get()],
                     fmt=self.v_fmt.get(),
@@ -674,6 +751,7 @@ class App(ttk.Frame):
                     year=int(year) if year.isdigit() else None,
                     poster=self.v_poster.get().strip() or None,
                     meta=meta, se=se if se else False,
+                    skip_audio=skip_audio,
                     lang_in=self.v_lang_in.get().strip().upper() or None,
                     lang_alt=self.v_lang_alt.get().strip().upper() or None,
                     audio_in=self._sel_index(self.v_ain),

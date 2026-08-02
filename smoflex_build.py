@@ -131,6 +131,33 @@ LANG3 = {          # 2-letter / loose -> 3-letter code used on the button + CC c
 def to3(code):
     return LANG3.get(code.lower(), code.upper()[:3])
 
+LANGNAMES = {           # subtitle sites label files by name as often as by code
+    'english': 'ENG', 'japanese': 'JPN', 'french': 'FRE', 'german': 'GER', 'spanish': 'SPA',
+    'castilian': 'CAS', 'italian': 'ITA', 'portuguese': 'POR', 'brazilian': 'POR',
+    'russian': 'RUS', 'korean': 'KOR', 'chinese': 'CHI', 'mandarin': 'CHI', 'turkish': 'TUR',
+    'polish': 'POL', 'greek': 'GRE', 'finnish': 'FIN', 'tagalog': 'TGL', 'filipino': 'TGL',
+    'dutch': 'DUT', 'swedish': 'SWE', 'norwegian': 'NOR', 'danish': 'DAN', 'czech': 'CZE',
+    'hungarian': 'HUN', 'romanian': 'RUM', 'arabic': 'ARA', 'hebrew': 'HEB', 'thai': 'THA',
+    'vietnamese': 'VIE', 'indonesian': 'IND', 'hindi': 'HIN', 'ukrainian': 'UKR',
+    'latin': 'LAT', 'sdh': 'SDH', 'signs': 'SGN', 'forced': 'SGN',
+}
+
+def srt_lang(path):
+    """Best guess at a subtitle file's language. Handles 'Movie.eng.srt', 'Movie-en.srt',
+    'Movie_es-419.srt' and 'Movie.English.srt'. Returns None when there is nothing to go on.
+
+    The trailing code wins over a language word in the name: packs often carry the source
+    language in every filename ("Movie.English.srt", "Movie.English-fr.srt") with only the
+    suffix telling them apart."""
+    base = os.path.splitext(os.path.basename(path))[0].lower()
+    m = re.search(r'[._\-\[\] ]([a-z]{2,3}(?:-[a-z0-9]{2,4})?)$', base)
+    if m and (m.group(1) in LANG3 or len(m.group(1)) == 3):
+        return to3(m.group(1))
+    for name, code in LANGNAMES.items():
+        if re.search(rf'(^|[^a-z]){name}([^a-z]|$)', base):
+            return code
+    return to3(m.group(1)) if m else None
+
 def ffprobe(path):
     rc, out, err = _run([FFPROBE, '-v', 'error', '-show_streams', '-of', 'json', path], capture=True)
     if rc != 0 or not out.strip():
@@ -244,7 +271,7 @@ def probe_source(video):
 
 def build(video, moflex, out_path=None, out_dir=None, extra_srts=None, boost=True,
           is3d=None, fmt='converted', tmdb_token=None, title=None, year=None, poster=None,
-          audio_in=None, audio_alt=None, lang_in=None, lang_alt=None,
+          audio_in=None, audio_alt=None, lang_in=None, lang_alt=None, skip_audio=False,
           offset=0.0, srt_offset=0.0, meta=None, se=None, log=print, cancel=None):
     """Run the whole pipeline. Returns the output path. `log` is a callback for progress text,
     `cancel` an optional threading.Event that aborts at the next checkpoint."""
@@ -265,7 +292,7 @@ def build(video, moflex, out_path=None, out_dir=None, extra_srts=None, boost=Tru
     work = tempfile.mkdtemp(prefix='smoflex_',
                             dir=scratch_root if os.path.isdir(scratch_root) else None)
     try:
-        t_parsed, y_parsed, se_auto = parse_name(video)
+        t_parsed, y_parsed, se_auto = parse_name(video or moflex)   # no source -> use the encode
         # se: None = decide from the filename, False = definitely not an episode (a short or a
         # music video whose name happens to look like one), (season, episode) = say so outright
         se = se_auto if se is None else (None if se is False else se)
@@ -277,28 +304,36 @@ def build(video, moflex, out_path=None, out_dir=None, extra_srts=None, boost=Tru
         log(f"Title: {title!r}  Year: {year or '?'}  {'3D' if is3d else '2D'}  "
             + (f'S{se[0]:02d}E{se[1]:02d}' if se else '(movie)'))
 
-        streams = ffprobe(video)
+        streams = ffprobe(video) if video else []
         audio = [s for s in streams if s['codec_type'] == 'audio']
         subs = [s for s in streams if s['codec_type'] == 'subtitle']
-        if not audio:
+        if skip_audio:
+            # the encode's own audio is already right: touch nothing, and skip the extraction
+            # and ADPCM encode entirely -- this is what makes a subtitles-only pass quick
+            a_eng = a_alt = eng_wav = alt_wav = None
+            in_lang = alt_lang = None
+            log('Keeping the encode\'s own audio — no extraction, no re-encode.')
+        if not audio and not skip_audio:
             raise RuntimeError('source has no audio')
         byidx = {s['index']: s for s in audio}
-        # in-band = the track stock players get (English by default); alt rides in the trailer
-        a_eng = (byidx.get(audio_in) if audio_in is not None else None) or \
-                next((s for s in audio if (s.get('tags', {}) or {}).get('language') == 'eng'), audio[0])
-        if audio_alt is not None:
-            a_alt = byidx.get(audio_alt) if audio_alt >= 0 else None      # -1 = none
-        else:
-            a_alt = next((s for s in audio if s is not a_eng), None)
-        if a_alt is a_eng:
-            a_alt = None
-        # A rip with no language tags probes as UND, and UND is what the player would show on
-        # the audio button. Caller-supplied labels win; otherwise fall back to the tag, and to
-        # ENG for the in-band track (the one every player hears).
-        det_in = to3((a_eng.get('tags', {}) or {}).get('language', 'und'))
-        det_alt = to3((a_alt.get('tags', {}) or {}).get('language', 'und')) if a_alt else None
-        in_lang = (lang_in or (det_in if det_in != 'UND' else 'ENG')).upper()[:3]
-        alt_lang = ((lang_alt or det_alt or 'UND').upper()[:3]) if a_alt else None
+        if not skip_audio:
+            # in-band = the track stock players get (English by default); alt rides in the trailer
+            a_eng = (byidx.get(audio_in) if audio_in is not None else None) or \
+                    next((s for s in audio if (s.get('tags', {}) or {}).get('language') == 'eng'),
+                         audio[0])
+            if audio_alt is not None:
+                a_alt = byidx.get(audio_alt) if audio_alt >= 0 else None   # -1 = none
+            else:
+                a_alt = next((s for s in audio if s is not a_eng), None)
+            if a_alt is a_eng:
+                a_alt = None
+            # A rip with no language tags probes as UND, and UND is what the player would show on
+            # the audio button. Caller-supplied labels win; otherwise fall back to the tag, and to
+            # ENG for the in-band track (the one every player hears).
+            det_in = to3((a_eng.get('tags', {}) or {}).get('language', 'und'))
+            det_alt = to3((a_alt.get('tags', {}) or {}).get('language', 'und')) if a_alt else None
+            in_lang = (lang_in or (det_in if det_in != 'UND' else 'ENG')).upper()[:3]
+            alt_lang = ((lang_alt or det_alt or 'UND').upper()[:3]) if a_alt else None
 
         # An encode often starts from a different master than the source file: a distributor
         # logo the rip lacks, a trimmed head, and so on. `offset` slides everything taken from
@@ -308,7 +343,7 @@ def build(video, moflex, out_path=None, out_dir=None, extra_srts=None, boost=Tru
             post = ['-af', f'adelay={int(round(offset * 1000))}:all=1']
         elif offset < 0:
             pre = ['-ss', f'{-offset:.3f}']
-        dur = _duration(video)
+        dur = _duration(video) if video else None
         if offset and dur:          # keep the length the source had: silence in at the head,
             post += ['-t', f'{dur:.3f}']   # the same amount pushed off the tail
 
@@ -320,13 +355,13 @@ def build(video, moflex, out_path=None, out_dir=None, extra_srts=None, boost=Tru
             if rc != 0 or not os.path.exists(p) or os.path.getsize(p) < 1024:
                 raise RuntimeError(f'audio extraction failed: {err.strip()[:200]}')
             return p
-        lang_of = lambda s: (s.get('tags', {}) or {}).get('language', 'und')
-        log(f"Extracting audio (in-band {in_lang}"
-            + (f" + trailer {alt_lang}" if a_alt else '') + ') — this is the slow part…')
-        eng_wav = wav(a_eng, 'eng')
-        ck()
-        alt_wav = wav(a_alt, 'alt') if a_alt else None
-        ck()
+        if not skip_audio:
+            log(f"Extracting audio (in-band {in_lang}"
+                + (f" + trailer {alt_lang}" if a_alt else '') + ') — this is the slow part…')
+            eng_wav = wav(a_eng, 'eng')
+            ck()
+            alt_wav = wav(a_alt, 'alt') if a_alt else None
+            ck()
 
         # subtitles: text tracks from the container, then any user-supplied SRTs
         srt_files = []; seen = set(); skipped = 0
@@ -343,23 +378,47 @@ def build(video, moflex, out_path=None, out_dir=None, extra_srts=None, boost=Tru
                 srt_files.append((c, p, True)); seen.add(c)       # True = came from the source
         if skipped:
             log(f"NOTE: {skipped} image-based (PGS/VobSub) subtitle track(s) skipped — supply text .srt instead.")
-        for p in extra_srts:
-            m = re.search(r'\.([a-z0-9-]{2,6})\.srt$', os.path.basename(p), re.I)
-            c = to3(m.group(1)) if m else 'SUB'
-            if c not in seen:
-                srt_files.append((c, p, False)); seen.add(c)      # False = supplied by hand
         # ENG is the default track (first wins), JPN next, everything else alphabetical
         _rank = {'ENG': 0, 'JPN': 1}
         srt_files.sort(key=lambda x: (_rank.get(x[0], 9), x[0]))
+        explicit = []
+        for item in extra_srts:
+            # an entry may be a plain path (guess the language) or (code, path) when the caller
+            # already knows better than any filename heuristic
+            if isinstance(item, (tuple, list)):
+                c, p = (item[0] or '').strip().upper()[:3] or 'SUB', item[1]
+            else:
+                p = item
+                c = srt_lang(p) or 'SUB'
+            if c in seen:            # never silently drop a file the user added by hand
+                log(f'NOTE: {os.path.basename(p)} is another {c} track — both are kept.')
+            explicit.append((c, p, False)); seen.add(c)          # False = supplied by hand
+        # A caller that spells out its own codes has also chosen the ORDER, and the first track
+        # is the default one, so that list is kept exactly as given and goes first.
+        if any(isinstance(i, (tuple, list)) for i in extra_srts):
+            srt_files = explicit + srt_files
+        else:
+            srt_files = sorted(srt_files + explicit, key=lambda x: (_rank.get(x[0], 9), x[0]))
         # Subtitles pulled OUT of the source share its timeline, so they move with the audio.
         # Files supplied by hand were timed to whatever release they were made for -- often the
         # same master the encode came from -- so they get their own knob and default to
         # untouched. (Downloaded subs for a film whose encode has a longer head are a real case:
         # the audio needed +14.4 s while the subtitles were already correct.)
+        # The core reads each subtitle's language off its FILENAME, so every file is copied
+        # (or shifted) into the scratch dir as "s.<CODE>.srt" first. Passing user paths straight
+        # through meant anything not already named that way was tagged SUB -- and several such
+        # files collapsed onto one label.
         moved = []
-        for c, p, from_source in srt_files:
+        for i, (c, p, from_source) in enumerate(srt_files):
             sh = offset if from_source else srt_offset
-            moved.append((c, shift_srt(p, os.path.join(work, f'sh.{c}.srt'), sh) if sh else p))
+            # the index keeps two tracks with the same code from overwriting one another; the
+            # core only reads the ".<CODE>.srt" tail, so a prefix is invisible to it
+            dst = os.path.join(work, f'x{i}.{c}.srt')
+            if sh:
+                shift_srt(p, dst, sh)
+            elif os.path.abspath(p) != os.path.abspath(dst):
+                shutil.copyfile(p, dst)
+            moved.append((c, dst))
         srt_files = moved
         if offset or srt_offset:
             log(f'Offsets applied: audio {offset:+.3f} s, extracted subtitles {offset:+.3f} s, '
@@ -423,10 +482,11 @@ def build(video, moflex, out_path=None, out_dir=None, extra_srts=None, boost=Tru
             out_path = os.path.join(out_dir or os.path.dirname(os.path.abspath(moflex)), base)
 
         # assemble via the core builder
-        args = [moflex, out_path, '--strip-audio', '--audio', eng_wav, '--lang', in_lang,
-                '--nfo', nfo]
-        if boost:
-            args.append('--normalize')
+        args = [moflex, out_path, '--nfo', nfo]
+        if eng_wav:                         # skip_audio leaves the encode's own track alone
+            args += ['--strip-audio', '--audio', eng_wav, '--lang', in_lang]
+            if boost:
+                args.append('--normalize')
         if alt_wav:
             args += ['--trailer-audio', alt_wav, '--trailer-lang', alt_lang]
         for c, p in srt_files:
@@ -498,6 +558,9 @@ def _cli(argv):
     ap.add_argument('--srt', action='append', default=[], metavar='FILE',
                     help='extra subtitle file, repeatable; language read from "name.eng.srt"')
     ap.add_argument('--no-normalize', action='store_true', help='keep the source levels')
+    ap.add_argument('--skip-audio', action='store_true',
+                    help="keep the audio already in the .moflex and only add subtitles "
+                         "and metadata (fast; the source video becomes optional)")
     ap.add_argument('--2d', dest='two_d', action='store_true', help='force 2D (default: from the name)')
     ap.add_argument('--3d', dest='three_d', action='store_true', help='force 3D')
     ap.add_argument('--format', choices=['native', 'converted'], default='converted',
@@ -534,7 +597,7 @@ def _cli(argv):
         build(a.video, a.moflex, out_path=a.out, out_dir=a.outdir, extra_srts=a.srt,
               boost=not a.no_normalize, is3d=is3d, fmt=a.format, tmdb_token=a.tmdb,
               title=a.title, year=a.year, poster=a.poster, offset=a.offset,
-              srt_offset=a.srt_offset, meta=meta,
+              srt_offset=a.srt_offset, meta=meta, skip_audio=a.skip_audio,
               lang_in=a.lang, lang_alt=a.alt_lang)
     except (RuntimeError, Cancelled) as ex:
         print(f'error: {ex}', file=sys.stderr)
