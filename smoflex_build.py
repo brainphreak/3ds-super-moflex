@@ -127,6 +127,11 @@ LANG3 = {          # 2-letter / loose -> 3-letter code used on the button + CC c
     'ru': 'RUS', 'rus': 'RUS', 'ko': 'KOR', 'kor': 'KOR', 'zh': 'CHI', 'chi': 'CHI',
     'tr': 'TUR', 'tur': 'TUR', 'pl': 'POL', 'pol': 'POL', 'el': 'GRE', 'gre': 'GRE',
     'fi': 'FIN', 'fin': 'FIN', 'tl': 'TGL', 'tgl': 'TGL', 'nl': 'DUT', 'sv': 'SWE',
+    'ar': 'ARA', 'he': 'HEB', 'iw': 'HEB', 'cs': 'CZE', 'da': 'DAN', 'no': 'NOR',
+    'nb': 'NOR', 'hu': 'HUN', 'ro': 'RUM', 'th': 'THA', 'vi': 'VIE', 'id': 'IND',
+    'hi': 'HIN', 'uk': 'UKR', 'sk': 'SLO', 'bg': 'BUL', 'sr': 'SCC', 'hr': 'SCR',
+    'ms': 'MAY', 'fa': 'PER', 'bn': 'BEN', 'ta': 'TAM', 'te': 'TEL', 'ml': 'MAL',
+    'pt-br': 'POR', 'zh-cn': 'CHI', 'zh-tw': 'CHI', 'es-mx': 'LAT',
 }
 def to3(code):
     return LANG3.get(code.lower(), code.upper()[:3])
@@ -150,13 +155,21 @@ def srt_lang(path):
     language in every filename ("Movie.English.srt", "Movie.English-fr.srt") with only the
     suffix telling them apart."""
     base = os.path.splitext(os.path.basename(path))[0].lower()
-    m = re.search(r'[._\-\[\] ]([a-z]{2,3}(?:-[a-z0-9]{2,4})?)$', base)
-    if m and (m.group(1) in LANG3 or len(m.group(1)) == 3):
-        return to3(m.group(1))
+    toks = [t for t in re.split(r'[._\-\[\] ]+', base) if t]
+    last = toks[-1] if toks else ''
+    # "…-es-419", "…-pt-br": a trailing region belongs to the code before it
+    if len(toks) >= 2:
+        pair = f'{toks[-2]}-{last}'
+        if pair in LANG3:
+            return LANG3[pair]
+        if re.fullmatch(r'\d{3}', last):
+            last = toks[-2]
+    if re.fullmatch(r'[a-z]{2,3}', last):
+        return to3(last)
     for name, code in LANGNAMES.items():
         if re.search(rf'(^|[^a-z]){name}([^a-z]|$)', base):
             return code
-    return to3(m.group(1)) if m else None
+    return None
 
 def ffprobe(path):
     rc, out, err = _run([FFPROBE, '-v', 'error', '-show_streams', '-of', 'json', path], capture=True)
