@@ -60,7 +60,25 @@ class App(ttk.Frame):
         self.grid(sticky='nsew')
         root.columnconfigure(0, weight=1)
         root.rowconfigure(0, weight=1)
-        self.columnconfigure(1, weight=1)
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+
+        # The form is taller than a laptop screen once every field is on it, so it lives in a
+        # scrolling canvas -- while Build/Cancel and the log stay pinned below, where they can
+        # never be pushed off the bottom.
+        self.canvas = tk.Canvas(self, highlightthickness=0)
+        self.canvas.grid(row=0, column=0, sticky='nsew')
+        vs = ttk.Scrollbar(self, orient='vertical', command=self.canvas.yview)
+        vs.grid(row=0, column=1, sticky='ns')
+        self.canvas.configure(yscrollcommand=vs.set)
+        self.form = ttk.Frame(self.canvas)
+        self.form.columnconfigure(1, weight=1)
+        self.canvas.create_window((0, 0), window=self.form, anchor='nw', tags='form')
+        self.form.bind('<Configure>',
+                       lambda e: self.canvas.configure(scrollregion=self.canvas.bbox('all')))
+        self.canvas.bind('<Configure>', lambda e: self.canvas.itemconfigure('form', width=e.width))
+        for seq in ('<MouseWheel>', '<Button-4>', '<Button-5>'):
+            self.canvas.bind_all(seq, self._on_wheel)
 
         if self.cfg.get('ffmpeg'):
             sb.set_tools(self.cfg['ffmpeg'])
@@ -116,7 +134,7 @@ class App(ttk.Frame):
                            'Where the finished file lands; the name is built from the metadata')
 
         # audio track choice
-        af = ttk.LabelFrame(self, text='Audio', padding=6)
+        af = ttk.LabelFrame(self.form, text='Audio', padding=6)
         af.grid(row=r, column=0, columnspan=3, sticky='ew', pady=(8, 2))
         af.columnconfigure(1, weight=1)
         af.columnconfigure(3, weight=1)
@@ -155,7 +173,7 @@ class App(ttk.Frame):
         r += 1
 
         # subtitles
-        sf = ttk.LabelFrame(self, text='Extra subtitles (text .srt — image subs cannot be used)',
+        sf = ttk.LabelFrame(self.form, text='Extra subtitles (text .srt — image subs cannot be used)',
                             padding=6)
         sf.grid(row=r, column=0, columnspan=3, sticky='ew', pady=2)
         sf.columnconfigure(0, weight=1)
@@ -182,7 +200,7 @@ class App(ttk.Frame):
         r += 1
 
         # metadata / options
-        of = ttk.LabelFrame(self, text='Metadata', padding=6)
+        of = ttk.LabelFrame(self.form, text='Metadata', padding=6)
         of.grid(row=r, column=0, columnspan=3, sticky='ew', pady=2)
         of.columnconfigure(1, weight=1)
         kr = ttk.Frame(of)
@@ -281,7 +299,7 @@ class App(ttk.Frame):
 
         # actions
         bar = ttk.Frame(self)
-        bar.grid(row=r, column=0, columnspan=3, sticky='ew', pady=(8, 4))
+        bar.grid(row=1, column=0, columnspan=2, sticky='ew', pady=(8, 4))
         bar.columnconfigure(2, weight=1)
         self.btn_build = ttk.Button(bar, text='Build SUPER MOFLEX', command=self._start)
         self.btn_build.grid(row=0, column=0)
@@ -294,11 +312,10 @@ class App(ttk.Frame):
 
         # log
         lf = ttk.Frame(self)
-        lf.grid(row=r, column=0, columnspan=3, sticky='nsew')
-        self.rowconfigure(r, weight=1)
+        lf.grid(row=2, column=0, columnspan=2, sticky='nsew')
         lf.columnconfigure(0, weight=1)
         lf.rowconfigure(0, weight=1)
-        self.txt = tk.Text(lf, height=12, wrap='word', state='disabled',
+        self.txt = tk.Text(lf, height=8, wrap='word', state='disabled',
                            font=('Menlo' if sys.platform == 'darwin' else 'Consolas', 10))
         self.txt.grid(row=0, column=0, sticky='nsew')
         sc = ttk.Scrollbar(lf, command=self.txt.yview)
@@ -317,11 +334,12 @@ class App(ttk.Frame):
         self._kind_changed()          # start with the TV row hidden for the default kind
 
     def _file_row(self, r, label, var, cmd, hint):
-        ttk.Label(self, text=label + ':').grid(row=r, column=0, sticky='w', pady=2)
-        ttk.Entry(self, textvariable=var).grid(row=r, column=1, sticky='ew', padx=4, pady=2)
-        ttk.Button(self, text='Browse…', command=cmd).grid(row=r, column=2, pady=2)
-        ttk.Label(self, text=hint, foreground='#666').grid(row=r + 1, column=1, columnspan=2,
-                                                           sticky='w')
+        f = self.form
+        ttk.Label(f, text=label + ':').grid(row=r, column=0, sticky='w', pady=2)
+        ttk.Entry(f, textvariable=var).grid(row=r, column=1, sticky='ew', padx=4, pady=2)
+        ttk.Button(f, text='Browse…', command=cmd).grid(row=r, column=2, pady=2)
+        ttk.Label(f, text=hint, foreground='#666').grid(row=r + 1, column=1, columnspan=2,
+                                                        sticky='w')
         return r + 2
 
     # ---- pickers --------------------------------------------------------------------------
@@ -835,6 +853,10 @@ class App(ttk.Frame):
                             'subtitle, the library info and the poster in a trailer that only '
                             'players which know about it read.\n\nNeeds ffmpeg. Nothing else.')
 
+    def _on_wheel(self, e):
+        step = -1 if getattr(e, 'num', 0) == 4 or getattr(e, 'delta', 0) > 0 else 1
+        self.canvas.yview_scroll(step, 'units')
+
     def log(self, line):
         self.txt['state'] = 'normal'
         self.txt.insert('end', line.rstrip() + '\n')
@@ -864,7 +886,10 @@ class App(ttk.Frame):
 def main():
     root = tk.Tk()
     root.title(APP)
-    root.minsize(720, 620)
+    root.minsize(720, 480)
+    root.update_idletasks()
+    h = min(1000, root.winfo_screenheight() - 120)      # never taller than the display
+    root.geometry(f'820x{h}')
     try:                                   # crisper widgets than the 1990s default theme
         ttk.Style().theme_use('aqua' if sys.platform == 'darwin' else 'vista')
     except tk.TclError:
