@@ -27,7 +27,11 @@ Usage:
                        the encode-pipeline audio is reference only)
   --audio-first        alternative to --strip-audio: keep the existing audio but move
                        it to stream 3 (bit patch); the --audio track takes stream 2
-  --normalize          peak-normalize each provided WAV to -1 dBFS (loud, no clipping)
+  --normalize          peak-normalize each provided WAV to -1 dBFS. NOTE this is PEAK, not
+                       loudness: film mixes already peak near full scale, so it barely changes
+                       how loud they SOUND (measured: -1.0 dB on Space Jam, i.e. quieter).
+                       smoflex_build does EBU R128 loudness normalisation at extraction
+                       instead; this pass then only takes up any headroom left.
   --trailer-audio x.wav  second language as a TRAILER after the last block (official player
                          never reads it; ours plays it as Audio Track 2)
   --trailer-srt x.srt    subtitles in the trailer; REPEATABLE for multiple languages
@@ -51,6 +55,7 @@ everything extra lives past the final block:
     'LNG0' -> char lang[4]: language of the IN-BAND audio track ("ENG")
   Languages auto-infer from ".xxx.wav" filenames; --lang / --trailer-lang override.
 """
+import array
 import struct
 import sys
 import wave
@@ -423,17 +428,28 @@ def main_args(args):
             next_si = min(audio_sis)   # replacement takes the freed slot: layout stays native
 
     def load_wav(path):
+        # array('h'), not a list: a feature film is ~200 M samples, and as Python int objects
+        # in a list that is several GB and gets the repack OOM-killed. Two bytes a sample here,
+        # and indexing still hands back plain ints, so nothing downstream changes.
         w = wave.open(path, 'rb')
         assert w.getsampwidth() == 2, 'need 16-bit PCM'
         chn, rate = w.getnchannels(), w.getframerate()
-        pcm = list(struct.unpack(f'<{w.getnframes() * chn}h', w.readframes(w.getnframes())))
+        pcm = array.array('h')
+        while True:                                     # chunked: never hold a second full copy
+            b = w.readframes(1 << 20)
+            if not b:
+                break
+            pcm.frombytes(b)
         w.close()
+        if sys.byteorder == 'big':
+            pcm.byteswap()
         if norm:
             peak = max(1, max(pcm), -min(pcm))
             target = 29204                              # -1.0 dBFS: scale=target/peak, clip-proof
             if peak != target:
                 sc = target / peak
-                pcm = [int(x * sc) for x in pcm]
+                for i in range(len(pcm)):               # in place, for the same reason
+                    pcm[i] = int(pcm[i] * sc)
                 db = __import__('math').log10(sc) * 20
                 print(f'    normalize {path.split("/")[-1]}: peak {peak} -> {target} ({db:+.1f} dB)')
         return pcm, chn, rate
@@ -588,7 +604,8 @@ def main_args(args):
             pcm, chn, rate = load_wav(tr_wav)
             total = len(pcm) // chn
             pad = (-total) % PKT_SAMPLES                 # pad tail with silence to a full packet
-            pcm = pcm + [0] * (pad * chn)
+            if pad:
+                pcm.extend(array.array('h', bytes(pad * chn * 2)))
             apkts = adpcm_packets(pcm, chn, rate)
             blob = b''.join(pl for _, pl in apkts)
             la = (lang_alt or infer_lang(tr_wav) or 'ALT').encode()[:3].ljust(4, b'\0')

@@ -429,22 +429,81 @@ def build(video, moflex, out_path=None, out_dir=None, extra_srts=None, boost=Tru
         # An encode often starts from a different master than the source file: a distributor
         # logo the rip lacks, a trimmed head, and so on. `offset` slides everything taken from
         # the source (both audio tracks and every subtitle) onto the encode's timeline.
+        # The delay is a FILTER, so it has to join the same -af chain as the loudness stage:
+        # ffmpeg keeps only the last -af on a command, so passing it separately silently
+        # replaced the whole loudness filter and every build with a positive offset came out
+        # un-normalised.
         pre, post = [], []
-        if offset > 0:
-            post = ['-af', f'adelay={int(round(offset * 1000))}:all=1']
-        elif offset < 0:
+        delay_f = f'adelay={int(round(offset * 1000))}:all=1' if offset > 0 else None
+        if offset < 0:
             pre = ['-ss', f'{-offset:.3f}']
         dur = _duration(video) if video else None
         if offset and dur:          # keep the length the source had: silence in at the head,
             post += ['-t', f'{dur:.3f}']   # the same amount pushed off the tail
 
         def wav(stream, tag):
+            """Extract one audio track, LOUDNESS-normalised when `boost` is on.
+
+            Peak normalisation (what --normalize does downstream) cannot make a film audible on a
+            handheld: cinema mixes already peak near full scale, so scaling the loudest SAMPLE to
+            -1 dBFS changes nothing -- measured on Totoro, both the original encode and a
+            peak-normalised rebuild sat near -28 LUFS while the peak was already -2.9 dBFS.
+            Perceived loudness is the AVERAGE level, so target that instead: EBU R128 to -16 LUFS
+            (the streaming standard) with a true-peak ceiling of -1 dBTP, and LRA=11 to pull the
+            quiet dialogue up toward the loud effects rather than just moving the whole thing.
+            The limiter is what makes "as loud as possible without clipping" actually achievable.
+            Two passes: measure, then correct with those measurements.
+
+            The fold-down to stereo has to happen BEFORE the loudness stage, inside the filter
+            chain. `-ac 2 -ar 44100` are output options, applied after -af: loudnorm would
+            normalise the 5.1 mix to -1 dBTP and the downmix that followed would then attenuate
+            it to keep the fold-down from clipping, throwing away most of the gain. Measured on
+            a 5.1 source: -13.82 LUFS the right way round, -21.74 LUFS the wrong way.
+            """
             p = os.path.join(work, f'a.{tag}.wav')
-            rc, _, err = _run([FFMPEG, '-y', '-v', 'error'] + pre + ['-i', video,
-                               '-map', f"0:{stream['index']}", '-ac', '2', '-ar', '44100']
-                              + post + ['-c:a', 'pcm_s16le', p], cancel)
+            # normalise exactly the signal that gets written: stereo, 44.1 kHz
+            head = 'aformat=sample_rates=44100:channel_layouts=stereo'
+            ln = 'I=-16:TP=-1.0:LRA=11'
+            chain = [head]
+            if boost:
+                # loudnorm prints its measurements at INFO level: with -v error the JSON never
+                # appears, the parse fails, and this silently falls back to peak normalising --
+                # i.e. to exactly the behaviour being replaced. Measure pass runs at -v info.
+                meas_cmd = [FFMPEG, '-y', '-v', 'info'] + pre + ['-i', video,
+                            '-map', f"0:{stream['index']}",
+                            '-af', f'{head},loudnorm={ln}:print_format=json',
+                            '-f', 'null', '-']
+                rc, _, meas = _run(meas_cmd, cancel, capture=True)
+                try:
+                    j = json.loads(meas[meas.rindex('{'):meas.rindex('}') + 1])
+                    chain.append(f'loudnorm={ln}:linear=true'
+                                 f":measured_I={j['input_i']}:measured_TP={j['input_tp']}"
+                                 f":measured_LRA={j['input_lra']}"
+                                 f":measured_thresh={j['input_thresh']}"
+                                 f":offset={j['target_offset']}")
+                    log(f'  {tag}: {j["input_i"]} LUFS (range {j["input_lra"]} LU) -> -16 LUFS')
+                except Exception:
+                    # Say this loudly. A silent fall-back to peak normalising is how a whole
+                    # library got built too quiet to hear on the handheld in the first place.
+                    log(f'  WARNING: {tag}: loudness measurement failed — this track falls back '
+                        f'to PEAK normalising and will probably be too quiet. Check the file.')
+            if delay_f:                       # time shift last: kept out of the measurement
+                chain.append(delay_f)
+            # loudnorm upsamples to 192 kHz internally for true-peak detection and EMITS at
+            # 192 kHz, so the rate has to be put back explicitly -- the WAV's rate is what the
+            # core writes into the moflex audio descriptor. Resampling AFTER the loudness stage
+            # is safe (the -1 dBTP ceiling leaves room); downmixing after it is not, which is
+            # why the fold-down stays at the head of the chain.
+            chain.append('aresample=44100')
+            cmd = [FFMPEG, '-y', '-v', 'error'] + pre + ['-i', video,
+                   '-map', f"0:{stream['index']}", '-af', ','.join(chain)]
+            rc, _, err = _run(cmd + post + ['-c:a', 'pcm_s16le', p], cancel)
             if rc != 0 or not os.path.exists(p) or os.path.getsize(p) < 1024:
                 raise RuntimeError(f'audio extraction failed: {err.strip()[:200]}')
+            with wave.open(p, 'rb') as h:     # this rate becomes the moflex's audio rate
+                if (h.getframerate(), h.getnchannels(), h.getsampwidth()) != (44100, 2, 2):
+                    raise RuntimeError(f'extracted {h.getframerate()} Hz x{h.getnchannels()} '
+                                       f'{h.getsampwidth()*8}-bit — expected 44100 x2 16-bit')
             return p
         if not skip_audio:
             log(f"Extracting audio (in-band {in_lang}"
