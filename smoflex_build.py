@@ -663,8 +663,12 @@ def build(video, moflex, out_path=None, out_dir=None, extra_srts=None, boost=Tru
             args.append('--keep-trailer-audio')
         if eng_wav:                         # skip_audio leaves the encode's own track alone
             args += ['--strip-audio', '--audio', eng_wav, '--lang', in_lang]
-            if boost:
-                args.append('--normalize')
+            # NOT --normalize. wav() has already brought this to -16 LUFS, and peak
+            # normalisation on top would undo it: loudnorm caps true peak at -1 dBTP but
+            # usually lands below it, so scaling the loudest sample back up to -1 dBFS adds
+            # gain the loudness stage deliberately did not. Harmless on a cinema mix that hits
+            # the limiter, wrong on anything quieter -- which is the material that needed the
+            # loudness stage in the first place.
         if alt_wav:
             args += ['--trailer-audio', alt_wav, '--trailer-lang', alt_lang]
         for c, p in srt_files:
