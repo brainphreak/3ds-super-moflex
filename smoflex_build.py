@@ -499,9 +499,12 @@ def build(video, moflex, out_path=None, out_dir=None, extra_srts=None, boost=Tru
                     meas_i, meas_tp = float(j['input_i']), float(j['input_tp'])
                     want = -16.0 - meas_i
                     room = -1.0 - meas_tp
-                    gain = max(min(want, room), MAX_CUT)
+                    # Floor the PEAK constraint, not the result: clamping the combined value
+                    # would also block a legitimate loudness REDUCTION on a master that is
+                    # already far louder than the target.
+                    gain = min(want, max(room, MAX_CUT))
                     chain.append(f'volume={gain:.2f}dB')
-                    if gain <= MAX_CUT + 0.01 and room < MAX_CUT:
+                    if abs(gain - MAX_CUT) < 0.01 and room < MAX_CUT <= want:
                         note = (f' (hot master {meas_tp:+.2f} dBTP; reduction held at '
                                 f'{MAX_CUT:.1f} dB instead of {room:+.2f})')
                     elif gain < want - 0.01:
