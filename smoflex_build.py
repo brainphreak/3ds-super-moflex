@@ -8,6 +8,7 @@ Turns (source video + encoded .moflex + options) into a self-contained SUPER MOF
 
 Requires ffmpeg / ffprobe on PATH. Pure-Python otherwise (Tkinter GUI ships with Python).
 """
+MAX_CUT = -1.0        # never attenuate a master by more than this (dB)
 import contextlib
 import json
 import os
@@ -476,12 +477,39 @@ def build(video, moflex, out_path=None, out_dir=None, extra_srts=None, boost=Tru
                 rc, _, meas = _run(meas_cmd, cancel, capture=True)
                 try:
                     j = json.loads(meas[meas.rindex('{'):meas.rindex('}') + 1])
-                    chain.append(f'loudnorm={ln}:linear=true'
-                                 f":measured_I={j['input_i']}:measured_TP={j['input_tp']}"
-                                 f":measured_LRA={j['input_lra']}"
-                                 f":measured_thresh={j['input_thresh']}"
-                                 f":offset={j['target_offset']}")
-                    log(f'  {tag}: {j["input_i"]} LUFS (range {j["input_lra"]} LU) -> -16 LUFS')
+                    # ONE CONSTANT GAIN -- never the loudnorm filter itself.
+                    #
+                    # loudnorm with linear=true silently falls back to DYNAMIC COMPRESSION
+                    # whenever the gain needed to reach the target would breach the true-peak
+                    # ceiling, which is most film masters. It squashed The Wind Rises from
+                    # LRA 17.5 to 10.8 -- gain wandering 1.97x to 4.33x inside 90 seconds --
+                    # and that is audible as crackle once it goes through the ADPCM encoder.
+                    # Changing the volume must not change the dynamics.
+                    #
+                    # Take the smaller of "what reaches -16" and "what the peak allows". A film
+                    # that cannot reach the target without squashing just ends up quieter.
+                    #
+                    # And a FLOOR on the reduction. `room` goes NEGATIVE on a hot master --
+                    # plenty of them measure +1 to +5 dBTP -- and the ceiling then quietly turns
+                    # the film DOWN by several decibels, which is an audible loss on a handheld.
+                    # The only reason to keep headroom is that IMA-ADPCM decode can overshoot a
+                    # full-scale sample, and that is worth a few tenths, not several dB. The
+                    # -1.0 dBTP figure came from loudnorm's TARGET, where it was a LIMITER
+                    # ceiling; it does not belong as a licence to attenuate.
+                    meas_i, meas_tp = float(j['input_i']), float(j['input_tp'])
+                    want = -16.0 - meas_i
+                    room = -1.0 - meas_tp
+                    gain = max(min(want, room), MAX_CUT)
+                    chain.append(f'volume={gain:.2f}dB')
+                    if gain <= MAX_CUT + 0.01 and room < MAX_CUT:
+                        note = (f' (hot master {meas_tp:+.2f} dBTP; reduction held at '
+                                f'{MAX_CUT:.1f} dB instead of {room:+.2f})')
+                    elif gain < want - 0.01:
+                        note = f' (capped from {want:+.2f} dB by true peak)'
+                    else:
+                        note = ''
+                    log(f'  {tag}: {meas_i:.2f} LUFS (range {j["input_lra"]} LU) '
+                        f'{gain:+.2f} dB -> {meas_i + gain:.2f} LUFS{note}')
                 except Exception:
                     # Say this loudly. A silent fall-back to peak normalising is how a whole
                     # library got built too quiet to hear on the handheld in the first place.
