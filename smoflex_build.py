@@ -21,6 +21,7 @@ import tempfile
 import urllib.request
 import wave
 
+import smoflex_ass
 import smoflex_core as core
 
 # ---- external tools (ffmpeg/ffprobe) -------------------------------------------------------
@@ -311,6 +312,12 @@ def download_poster(tmdb_path, dest, size='w500'):
     return dest
 
 IMAGE_SUBS = {'hdmv_pgs_subtitle', 'dvd_subtitle', 'dvdsub', 'xsub', 'pgssub'}
+ASS_SUBS = {'ass', 'ssa'}
+# The player skips any SUB section bigger than this -- the track simply never appears in its
+# subtitle menu, with no error anywhere. A fansub ASS with karaoke opening/ending effects runs
+# well past it raw (High School DxD HERO 02: 1.4 MB, 7,023 of 8,483 lines are OP karaoke), and
+# under 40 KB once smoflex_ass.write_ass has dropped the effect layers.
+SUB_SECTION_MAX = 1024 * 1024
 
 def _duration(video):
     """Container duration in seconds, or None if ffprobe won't say."""
@@ -338,6 +345,35 @@ def shift_srt(src, dst, offset):
         body = f.read()
     with open(dst, 'w', encoding='utf-8') as f:
         f.write(_TS.sub(bump, body))
+    return dst
+
+_ASS_TS = re.compile(r'^(Dialogue:[^,]*,)(\d+:\d\d:\d\d\.\d\d),(\d+:\d\d:\d\d\.\d\d),', re.M)
+
+def shift_ass(src, dst, offset):
+    """shift_srt for ASS: move every Dialogue line's Start and End by `offset` seconds.
+    Assumes the standard Format (Layer, Start, End, ...) -- the order write_ass() keeps."""
+    off_cs = int(round(offset * 100))
+
+    def one(v):
+        h, m, rest = v.split(':'); sec, cs = rest.split('.')
+        t = max(0, ((int(h) * 60 + int(m)) * 60 + int(sec)) * 100 + int(cs) + off_cs)
+        return f'{t//360000}:{t//6000%60:02d}:{t//100%60:02d}.{t%100:02d}'
+
+    with open(src, encoding='utf-8', errors='replace') as f:
+        body = f.read()
+    with open(dst, 'w', encoding='utf-8') as f:
+        f.write(_ASS_TS.sub(lambda m: f'{m.group(1)}{one(m.group(2))},{one(m.group(3))},', body))
+    return dst
+
+def is_ass(path):
+    return os.path.splitext(path)[1].lower() in ('.ass', '.ssa')
+
+def clean_ass(src, dst, log):
+    """Embed-ready copy of an ASS/SSA file: karaoke/typesetting effect layers, drawings, comments
+    and attached fonts dropped, styles and override tags kept (smoflex_ass.write_ass)."""
+    kept = smoflex_ass.write_ass(src, dst)
+    log(f'  ASS cleaned: {os.path.getsize(src):,} B -> {os.path.getsize(dst):,} B, '
+        f'{kept} line(s) kept')
     return dst
 
 def probe_source(video):
@@ -552,9 +588,13 @@ def build(video, moflex, out_path=None, out_dir=None, extra_srts=None, boost=Tru
             if st.get('codec_name') in IMAGE_SUBS:
                 skipped += 1; continue
             c = to3((st.get('tags', {}) or {}).get('language', 'und'))
-            p = os.path.join(work, f's{st["index"]}.{c}.srt')
+            # an ASS/SSA track stays ASS (the player renders its styles); everything else
+            # becomes SRT
+            ass = st.get('codec_name') in ASS_SUBS
+            p = os.path.join(work, f's{st["index"]}.{c}.{"ass" if ass else "srt"}')
             rc, _, err = _run([FFMPEG, '-y', '-v', 'error', '-i', video,
-                               '-map', f"0:{st['index']}", p], cancel)
+                               '-map', f"0:{st['index']}"] + (['-c:s', 'copy'] if ass else [])
+                              + [p], cancel)
             if rc == 0 and os.path.exists(p) and os.path.getsize(p) > 0:
                 # two tracks can share a language (a plain and an SDH English): keep both
                 srt_files.append((c, p, True)); seen.add(c)       # True = came from the source
@@ -602,9 +642,19 @@ def build(video, moflex, out_path=None, out_dir=None, extra_srts=None, boost=Tru
         for i, (c, p, from_source) in enumerate(srt_files):
             sh = offset if from_source else srt_offset
             # the index keeps two tracks with the same code from overwriting one another; the
-            # core only reads the ".<CODE>.srt" tail, so a prefix is invisible to it
-            dst = os.path.join(work, f'x{i}.{c}.srt')
-            if sh:
+            # core only reads the ".<CODE>.srt|ass" tail, so a prefix is invisible to it
+            ext = 'ass' if is_ass(p) else 'srt'
+            dst = os.path.join(work, f'x{i}.{c}.{ext}')
+            if ext == 'ass':
+                # Never embed an ASS raw, whether extracted or supplied by hand: its karaoke
+                # layers alone can push the section past SUB_SECTION_MAX, and then the player
+                # drops the track entirely.
+                p = clean_ass(p, os.path.join(work, f'x{i}.clean.{c}.ass'), log)
+                if sh:
+                    shift_ass(p, dst, sh)
+                else:
+                    shutil.copyfile(p, dst)
+            elif sh:
                 shift_srt(p, dst, sh)
             elif os.path.abspath(p) != os.path.abspath(dst):
                 shutil.copyfile(p, dst)
@@ -623,6 +673,12 @@ def build(video, moflex, out_path=None, out_dir=None, extra_srts=None, boost=Tru
             elif frac > 0.01:
                 log(f'NOTE: {c} has {frac*100:.1f}% characters with no glyph ({sample}) — mostly '
                     f'they will show as "?".')
+            size = os.path.getsize(dst)
+            if size + 4 > SUB_SECTION_MAX:
+                raise RuntimeError(
+                    f'The {c} subtitle track ({os.path.basename(p)}) is {size:,} bytes'
+                    f'{" even after cleaning" if ext == "ass" else ""}; the player skips any track over {SUB_SECTION_MAX:,} bytes, so it '
+                    f'would never appear in the subtitle menu. Trim it or leave it out.')
             moved.append((c, dst))
         srt_files = moved
         if offset or srt_offset:
@@ -752,6 +808,9 @@ def verify(path):
             f.seek(p); h = f.read(8); cc = h[:4]; ln = struct.unpack('<I', h[4:])[0]
             if cc not in known or ln == 0 or p + 8 + ln > fsz - 16:
                 raise RuntimeError(f'verify: corrupt trailer section at byte {p}')
+            if cc in (b'SUB0', b'SUB1') and ln > SUB_SECTION_MAX:
+                raise RuntimeError(f'verify: a subtitle section is {ln:,} bytes; the player '
+                                   f'skips anything over {SUB_SECTION_MAX:,}')
             secs[cc.decode()] = secs.get(cc.decode(), 0) + 1
             p += 8 + ln
         if p != fsz - 16:

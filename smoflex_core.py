@@ -358,7 +358,7 @@ def main_args(args):
 
     def infer_lang_ext(path):
         import re as _re
-        m = _re.search(r'\.([a-z]{2,3})\.(srt)$', path or '', _re.I)
+        m = _re.search(r'\.([a-z]{2,3})\.(srt|ass|ssa)$', path or '', _re.I)   # SUB1 holds ASS too
         return m.group(1).upper()[:3] if m else None
     i = 2
     while i < len(args):

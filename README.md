@@ -110,6 +110,10 @@ MIT — see [LICENSE](LICENSE).
 ## Notes and limits
 
 - Subtitles must be **text**. PGS/VobSub tracks are reported and skipped.
+- ASS/SSA tracks (from the source or added by hand) stay ASS but are **cleaned** first: karaoke
+  and typesetting effect layers, vector drawings, comments and attached fonts are dropped. A raw
+  fansub track with an animated opening/ending can exceed 1 MB, and the player silently skips any
+  subtitle track over 1 MB. The build stops with an error if a track is still too big.
 - Audio is resampled to 44.1 kHz stereo — that is what the format carries.
 - Normalization is peak-only: one constant multiplier so the loudest sample lands at −1 dBFS.
   No compression, no dynamics touched, and clipping is impossible by construction.
