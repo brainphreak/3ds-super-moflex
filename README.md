@@ -114,12 +114,15 @@ MIT — see [LICENSE](LICENSE).
   and typesetting effect layers, vector drawings, comments and attached fonts are dropped. A raw
   fansub track with an animated opening/ending can exceed 1 MB, and the player silently skips any
   subtitle track over 1 MB. The build stops with an error if a track is still too big.
-- Song **karaoke is rebuilt as plain lines**, not dropped. Fansubs write each sung line once as a
-  `karaoke` comment and generate the animation from it; the builder throws the animation away and
-  keeps those lines (timing tags removed), shown where the song's style puts them — usually the top
-  of the screen. A track whose karaoke exists *only* as animation (no source lines) can't be rebuilt;
-  the build log names those styles. Rebuild from the **original** subtitle source: a file made by an
-  older builder no longer carries the source lines.
+- Song **karaoke is rebuilt as plain lines**, not dropped. Animated karaoke is thousands of tiny
+  pieces (a letter or syllable each, often redrawn every frame); the builder reassembles every
+  line they draw — words in order, spaces where words end — and keeps it as one plain line at the
+  top or bottom of the screen, where the song was drawn. Timing comes from the animation itself,
+  so it stays in sync with the music. When the fansub also kept its source lyrics, their exact
+  wording is used. Checked word-for-word against the real lyrics on High School DxD and Re:Zero
+  (65/65 lines), with and without the source lyrics present. Animated signs are rebuilt the same
+  way. Rebuild from the **original** subtitle source: a file made by an older builder no longer
+  carries the animation to rebuild from.
 - Audio is resampled to 44.1 kHz stereo — that is what the format carries.
 - Normalization is peak-only: one constant multiplier so the loudest sample lands at −1 dBFS.
   No compression, no dynamics touched, and clipping is impossible by construction.
