@@ -374,6 +374,10 @@ def clean_ass(src, dst, log):
     kept = smoflex_ass.write_ass(src, dst)
     log(f'  ASS cleaned: {os.path.getsize(src):,} B -> {os.path.getsize(dst):,} B, '
         f'{kept} line(s) kept')
+    if smoflex_ass.write_ass.restored:
+        log(f'  karaoke: {smoflex_ass.write_ass.restored} song line(s) rebuilt as plain text')
+    for st in smoflex_ass.write_ass.lost:
+        log(f'  karaoke style "{st}" is animation only (no source lines) -- left out')
     return dst
 
 def probe_source(video):
